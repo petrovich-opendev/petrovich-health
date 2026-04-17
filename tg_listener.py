@@ -135,6 +135,10 @@ def _save_chat_id(username: str, chat_id: str) -> None:
 DATA_DIR.mkdir(exist_ok=True)
 LOGS_DIR.mkdir(exist_ok=True)
 
+# ── Pending actions per user (dialog state) ──
+# Key: owner_id, Value: {"action": "feedback|goal_type|goal_weight|...", "data": {}}
+_pending: dict[str, dict] = {}
+
 
 def setup_logging() -> logging.Logger:
     log_file = LOGS_DIR / f"bot-{datetime.now(MSK_TZ).strftime('%Y-%m-%d')}.log"
@@ -580,8 +584,8 @@ def handle_command(text: str, owner_id: str = "") -> str | None:
 
     if cmd_name in ("/start", "/help"):
         return (
-            "<b>Health Analytics Bot</b>\n\n"
-            "Отправь PDF или скопируй текст анализов — я извлеку показатели и сохраню.\n\n"
+            "🏥 <b>Health Analytics Bot</b>\n\n"
+            "Отправь PDF, фото или текст анализов — я извлеку показатели и сохраню.\n\n"
             "<b>Команды:</b>\n"
             "/last — последние результаты\n"
             "/trend &lt;показатель&gt; — тренд (напр. /trend гемоглобин)\n"
@@ -598,7 +602,8 @@ def handle_command(text: str, owner_id: str = "") -> str | None:
             "📎 PDF файл — парсинг и сохранение\n"
             "📸 Фото анализов — OCR распознавание\n"
             "📝 Текст анализов — автораспознавание\n\n"
-            "Любой другой текст — вопрос о здоровье."
+            "Любой другой текст — вопрос о здоровье.\n\n"
+            "💬 Нашёл баг или есть идея? /feedback твоё сообщение"
         )
 
     if cmd_name == "/last":
@@ -620,6 +625,9 @@ def handle_command(text: str, owner_id: str = "") -> str | None:
         return "\n".join(lines)
 
     if cmd_name == "/trend":
+        if not arg:
+            _pending[owner_id] = {"ts": time.time(), "action": "trend"}
+            return "📈 Какой показатель посмотреть? Например: <i>гемоглобин</i>, <i>АЛТ</i>, <i>железо</i>"
         return ("__trend__", arg, owner_id)
 
     if cmd_name == "/abnormal":
@@ -650,7 +658,8 @@ def handle_command(text: str, owner_id: str = "") -> str | None:
 
     if cmd_name == "/search":
         if not arg:
-            return "Укажи что искать: /search фосфолипиды"
+            _pending[owner_id] = {"ts": time.time(), "action": "search"}
+            return "🔍 Что ищем? Напиши название показателя, препарата или диагноза"
         # Search in lab results
         rows = query_fulltext_search(arg, owner_id=owner_id)
         # Search in documents
@@ -674,14 +683,17 @@ def handle_command(text: str, owner_id: str = "") -> str | None:
         return "\n".join(lines)
 
     if cmd_name == "/goal":
-        if not arg:
-            return (
-                "<b>Установить цель</b>\n\n"
-                "Формат: /goal &lt;тип&gt; &lt;вес&gt; &lt;рост&gt; &lt;возраст&gt; &lt;активность&gt;\n\n"
-                "Типы: muscle_gain, fat_loss, recomp, endurance, longevity, health\n"
-                "Активность: sedentary, light, moderate, active, very_active\n\n"
-                "Пример:\n<code>/goal muscle_gain 87 183 44 active</code>"
-            )
+        _pending[owner_id] = {"ts": time.time(), "action": "goal_type"}
+        return (
+            "🎯 <b>Какая у тебя цель?</b>\n\n"
+            "1️⃣ Набор мышечной массы\n"
+            "2️⃣ Снижение жира\n"
+            "3️⃣ Рекомпозиция (и то и то)\n"
+            "4️⃣ Выносливость\n"
+            "5️⃣ Долголетие\n"
+            "6️⃣ Общее здоровье"
+        )
+        # flow continues in _handle_pending
         parts_goal = arg.split()
         if len(parts_goal) < 5:
             return "Нужно 5 параметров: тип вес рост возраст активность"
@@ -718,16 +730,16 @@ def handle_command(text: str, owner_id: str = "") -> str | None:
 
     if cmd_name == "/weight":
         if not arg:
-            return "Формат: /weight 87.5"
+            _pending[owner_id] = {"ts": time.time(), "action": "weight"}
+            return "⚖️ Сколько весишь сегодня?"
         try:
-            w = float(arg.replace(",", "."))
+            w = float(arg.replace(",", ".").replace("кг", "").strip())
             from db import get_client
             ch = get_client()
             from datetime import datetime
             ch.insert("body_log", [[
                 owner_id, datetime.now(), w, None, "",
             ]], column_names=["owner_id", "ts", "weight_kg", "body_fat_pct", "notes"])
-            # Check recent trend
             recent = ch.query(
                 f"SELECT ts, weight_kg FROM body_log WHERE owner_id = '{owner_id}' "
                 f"ORDER BY ts DESC LIMIT 5"
@@ -735,12 +747,21 @@ def handle_command(text: str, owner_id: str = "") -> str | None:
             if len(recent.result_rows) >= 2:
                 prev = recent.result_rows[1][1]
                 diff = w - prev
-                return f"Вес: <b>{w} кг</b> ({diff:+.1f} кг)\n\nПодробнее: спроси 'динамика веса'"
-            return f"Вес: <b>{w} кг</b> — записано"
+                icon = "📈" if diff > 0 else "📉" if diff < 0 else "➡️"
+                return f"⚖️ Вес: <b>{w} кг</b> ({icon} {diff:+.1f} кг)\n\n💬 Спроси <i>подробнее</i> для динамики"
+            return f"⚖️ Вес: <b>{w} кг</b> — записано ✅"
         except ValueError:
-            return "Формат: /weight 87.5"
+            return "⚖️ Не понял. Напиши просто число, например: 87.5"
 
     if cmd_name == "/eat":
+        if not arg:
+            _pending[owner_id] = {"ts": time.time(), "action": "eat"}
+            return (
+                "🍽 <b>Что ты ел?</b>\n\n"
+                "📸 Отправь фото тарелки\n"
+                "✍️ Или напиши текстом, например:\n"
+                "<i>куриная грудка 200г, рис 150г, огурец</i>"
+            )
         return ("__eat__", arg, owner_id)
 
     if cmd_name == "/week":
@@ -903,6 +924,199 @@ def ask_llm(question: str, owner_id: str = "") -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 # Message processing
 # ─────────────────────────────────────────────────────────────────────────────
+def _handle_pending(chat_id: str, owner_id: str, text: str, user: dict) -> bool:
+    """Handle reply to a pending dialog. Returns True if handled."""
+    pending = _pending.get(owner_id)
+    if not pending:
+        return False
+
+    action = pending.get("action", "")
+
+    # ── Feedback ──
+    if action == "feedback":
+        del _pending[owner_id]
+        try:
+            resp = requests.post(
+                "https://api.github.com/repos/YOUR_GITHUB_USER/petrovich-health/issues",
+                headers={
+                    "Authorization": "token YOUR_GITHUB_TOKEN",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "title": text[:100],
+                    "body": f"**From:** {user['name']}\n\n{text}",
+                    "labels": ["feedback"],
+                },
+                timeout=10,
+            )
+            if resp.status_code == 201:
+                url = resp.json().get("html_url", "")
+                send_message(chat_id, f"✅ Спасибо! Отзыв отправлен.")
+            else:
+                send_message(chat_id, "⚠️ Не удалось отправить. Напиши the developer")
+        except Exception:
+            send_message(chat_id, "⚠️ Ошибка. Напиши the developer")
+        return True
+
+    # ── Goal: step 1 — type ──
+    if action == "goal_type":
+        goal_map = {"1": "muscle_gain", "2": "fat_loss", "3": "recomp",
+                     "4": "endurance", "5": "longevity", "6": "health"}
+        # Also accept Russian text
+        text_map = {
+            "набор": "muscle_gain", "масса": "muscle_gain", "массу": "muscle_gain",
+            "похуд": "fat_loss", "сушк": "fat_loss", "жир": "fat_loss", "сброс": "fat_loss",
+            "рекомп": "recomp",
+            "выносл": "endurance", "кардио": "endurance",
+            "долголет": "longevity",
+            "здоров": "health",
+        }
+        goal_type = goal_map.get(text.strip())
+        if not goal_type:
+            t = text.strip().lower()
+            for key, val in text_map.items():
+                if key in t:
+                    goal_type = val
+                    break
+        if not goal_type:
+            send_message(chat_id, "🤔 Не понял. Напиши цифру 1-6 или опиши цель")
+            return True
+        _pending[owner_id] = {"ts": time.time(), "action": "goal_weight", "data": {"goal_type": goal_type}}
+        goal_labels = {"muscle_gain": "Набор массы", "fat_loss": "Снижение жира",
+                       "recomp": "Рекомпозиция", "endurance": "Выносливость",
+                       "longevity": "Долголетие", "health": "Здоровье"}
+        send_message(chat_id, f"✅ Цель: <b>{goal_labels.get(goal_type, goal_type)}</b>\n\n⚖️ Сколько весишь? (кг)")
+        return True
+
+    # ── Goal: step 2 — weight ──
+    if action == "goal_weight":
+        try:
+            w = float(text.replace(",", ".").replace("кг", "").strip())
+            pending["data"]["weight"] = w
+            pending["action"], pending["ts"] = "goal_height", time.time()
+            send_message(chat_id, f"✅ Вес: <b>{w} кг</b>\n\n📏 Рост? (см)")
+            return True
+        except ValueError:
+            send_message(chat_id, "🤔 Напиши число, например: 87")
+            return True
+
+    # ── Goal: step 3 — height ──
+    if action == "goal_height":
+        try:
+            h = float(text.replace(",", ".").replace("см", "").strip())
+            pending["data"]["height"] = h
+            pending["action"], pending["ts"] = "goal_age", time.time()
+            send_message(chat_id, f"✅ Рост: <b>{h} см</b>\n\n🎂 Возраст?")
+            return True
+        except ValueError:
+            send_message(chat_id, "🤔 Напиши число, например: 183")
+            return True
+
+    # ── Goal: step 4 — age ──
+    if action == "goal_age":
+        try:
+            age = int(text.replace("лет", "").replace("год", "").strip())
+            pending["data"]["age"] = age
+            pending["action"], pending["ts"] = "goal_activity", time.time()
+            send_message(chat_id,
+                f"✅ Возраст: <b>{age}</b>\n\n"
+                f"🏃 Уровень активности?\n\n"
+                f"1️⃣ Сидячий (офис, мало движения)\n"
+                f"2️⃣ Лёгкий (1-2 тренировки в неделю)\n"
+                f"3️⃣ Средний (3-4 тренировки)\n"
+                f"4️⃣ Высокий (5-6 тренировок)\n"
+                f"5️⃣ Очень высокий (ежедневно + физическая работа)")
+            return True
+        except ValueError:
+            send_message(chat_id, "🤔 Напиши число, например: 44")
+            return True
+
+    # ── Goal: step 5 — activity → calculate ──
+    if action == "goal_activity":
+        act_map = {"1": "sedentary", "2": "light", "3": "moderate", "4": "active", "5": "very_active"}
+        act_text = {"сидяч": "sedentary", "офис": "sedentary", "лёг": "light", "легк": "light",
+                    "средн": "moderate", "умерен": "moderate", "высок": "active", "интенс": "active",
+                    "очень": "very_active", "ежедн": "very_active"}
+        activity = act_map.get(text.strip())
+        if not activity:
+            t = text.strip().lower()
+            for key, val in act_text.items():
+                if key in t:
+                    activity = val
+                    break
+        if not activity:
+            send_message(chat_id, "🤔 Напиши цифру 1-5")
+            return True
+
+        d = pending["data"]
+        del _pending[owner_id]
+
+        bmr = calc_bmr(d["weight"], d["height"], d["age"])
+        tdee = calc_tdee(bmr, activity)
+        macros = calc_macros(d["weight"], tdee, d["goal_type"], on_trt=True)
+        rate = calc_weekly_rate(d["goal_type"], d["weight"])
+
+        # Save to CH
+        from db import get_client
+        import uuid as _uuid
+        ch = get_client()
+        ch.insert("goals", [[
+            str(_uuid.uuid4()), owner_id, None, True,
+            d["goal_type"], "", None, None, d["weight"], d["height"], d["age"],
+            "male", activity, round(bmr), round(tdee), macros["target_calories"],
+            macros["protein_g"], macros["fat_g"], macros["carbs_g"],
+            macros["leucine_daily_g"], "[]",
+        ]], column_names=[
+            "id", "owner_id", "created_at", "active",
+            "goal_type", "description", "target_weight_kg", "target_date",
+            "current_weight_kg", "height_cm", "age", "sex", "activity_level",
+            "bmr", "tdee", "target_calories",
+            "protein_g", "fat_g", "carbs_g", "leucine_target_g", "medications",
+        ])
+
+        send_message(chat_id, format_goal_summary(
+            d["goal_type"], d["weight"], d["height"], d["age"],
+            activity, bmr, tdee, macros, rate))
+        return True
+
+    # ── Weight ──
+    if action == "weight":
+        del _pending[owner_id]
+        # Reuse handle_command logic
+        cmd_resp = handle_command(f"/weight {text}", owner_id)
+        if cmd_resp and not isinstance(cmd_resp, tuple):
+            send_message(chat_id, cmd_resp)
+        return True
+
+    # ── Search ──
+    if action == "search":
+        del _pending[owner_id]
+        cmd_resp = handle_command(f"/search {text}", owner_id)
+        if cmd_resp and not isinstance(cmd_resp, tuple):
+            send_message(chat_id, cmd_resp)
+        return True
+
+    # ── Trend ──
+    if action == "trend":
+        del _pending[owner_id]
+        cmd_resp = handle_command(f"/trend {text}", owner_id)
+        if isinstance(cmd_resp, tuple):
+            _handle_rich_command(cmd_resp, chat_id, owner_id, user)
+        elif cmd_resp:
+            send_message(chat_id, cmd_resp)
+        return True
+
+    # ── Eat ──
+    if action == "eat":
+        del _pending[owner_id]
+        _process_eat(chat_id, owner_id, text)
+        return True
+
+    # Unknown pending — clear and fall through
+    del _pending[owner_id]
+    return False
+
+
 def _handle_rich_command(cmd: tuple, chat_id: str, owner_id: str, user: dict) -> None:
     """Handle commands that need to send photos/documents."""
     action = cmd[0]
@@ -971,7 +1185,12 @@ def _handle_rich_command(cmd: tuple, chat_id: str, owner_id: str, user: dict) ->
     elif action == "__eat__":
         food_text = cmd[1] if len(cmd) > 1 else ""
         if not food_text:
-            send_message(chat_id, "Что ты ел? Напиши: /eat куриная грудка 200г, рис 150г, огурец")
+            send_message(chat_id,
+                "🍽 <b>Записать приём пищи</b>\n\n"
+                "📸 Отправь <b>фото</b> тарелки — распознаю автоматически\n\n"
+                "✍️ Или напиши что ел:\n"
+                "<code>/eat куриная грудка 200г, рис 150г, огурец</code>"
+            )
             return
         send_typing(chat_id)
         _process_eat(chat_id, owner_id, food_text)
@@ -1283,6 +1502,29 @@ def process_message(message: dict) -> None:
 
     # L0: save user message to chat log
     insert_chat_message("user", text, msg_id, owner_id)
+
+    # ── Handle pending dialog actions (user replied to a previous question) ──
+    if owner_id in _pending and not text.startswith("/"):
+        # Cancel keywords
+        if text.strip().lower() in ("отмена", "отменить", "cancel", "стоп", "нет"):
+            del _pending[owner_id]
+            send_message(chat_id, "��� Отменено")
+            return
+        # Timeout: pending older than 5 minutes → clear silently
+        pending_ts = _pending[owner_id].get("ts", 0)
+        if time.time() - pending_ts > 300:
+            del _pending[owner_id]
+            # Fall through to normal processing
+        else:
+            handled = _handle_pending(chat_id, owner_id, text, user)
+            if handled:
+                return
+
+    # Feedback → GitHub Issue (dialog mode)
+    if text.strip().lower().startswith("/feedback"):
+        _pending[owner_id] = {"ts": time.time(), "action": "feedback"}
+        send_message(chat_id, "💬 Напиши что не так или что хочешь улучшить:")
+        return
 
     # Reminders — handled here because needs chat_id
     if text.strip().lower().startswith("/remind"):

@@ -137,3 +137,25 @@ clickhouse-client -q "GRANT ALL ON health_analytics.* TO health_bot"
 ## License
 
 Apache License 2.0 — see [LICENSE](LICENSE)
+
+## Author
+
+**Ruslan Karimov** — Industrial AI architect, building production multi-agent systems for mining & health analytics.
+
+- LinkedIn: [linkedin.com/in/karimov-ruslan-69790b7](https://www.linkedin.com/in/karimov-ruslan-69790b7/)
+- Telegram: [@petrovich_mobile](https://t.me/petrovich_mobile)
+- Platform: [agentdata.pro](https://agentdata.pro)
+
+Built with [Claude Code](https://claude.ai/code) — AI-powered development.
+
+## Contributing
+
+1. Fork the repo
+2. Create a feature branch (`feat/your-feature`)
+3. Send a PR
+
+Found a bug? Open an [Issue](https://github.com/petrovich-opendev/petrovich-health/issues) or use `/feedback` command in the bot.
+
+## Star History
+
+If this project helped you — give it a ⭐ on GitHub. It helps others find it.

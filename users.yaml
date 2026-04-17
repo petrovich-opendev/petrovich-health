@@ -1,0 +1,11 @@
+# Access control: add Telegram usernames to grant access
+# Bot auto-saves chat_id on first message from authorized user
+# Each user gets fully isolated data — nobody sees anyone else's records
+
+users:
+  - username: your_telegram_username  # without @
+    name: Your Name
+    role: admin
+  # - username: family_member
+  #   name: Name
+  #   role: user

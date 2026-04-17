@@ -1,0 +1,171 @@
+# Nutrient interaction matrix — antagonisms and synergies
+# Evidence: Cambridge British Journal of Nutrition, PMC reviews
+# Each interaction: type (antagonist/synergist), mechanism, timing advice
+
+antagonists:
+  - pair: [calcium, iron]
+    type: antagonist
+    mechanism: "Ca конкурирует за DMT1 транспортёр в кишечнике"
+    advice: "Разнести на 2+ часа. Железо утром натощак с вит С, кальций вечером"
+    evidence: "A"
+
+  - pair: [zinc, copper]
+    type: antagonist
+    mechanism: "Zn индуцирует металлотионеин в энтероцитах, который связывает Cu"
+    advice: "Zn > 50мг/день → дефицит Cu за 20 недель. При длительном Zn добавлять Cu 1-2мг"
+    evidence: "A"
+
+  - pair: [zinc, iron]
+    type: antagonist
+    mechanism: "Конкуренция за DMT1 при приёме натощак"
+    advice: "Не принимать вместе натощак. С едой — взаимодействие минимально"
+    evidence: "B"
+
+  - pair: [calcium, zinc]
+    type: antagonist
+    mechanism: "Высокие дозы Ca снижают абсорбцию Zn"
+    advice: "Разнести приём"
+    evidence: "B"
+
+  - pair: [calcium, magnesium]
+    type: antagonist
+    mechanism: "Конкуренция за абсорбцию при высоких дозах (>500мг Ca)"
+    advice: "Ca и Mg в разные приёмы. Mg вечером (расслабляет), Ca с едой"
+    evidence: "B"
+
+  - pair: [iron, tea_coffee]
+    type: antagonist
+    mechanism: "Танины и полифенолы хелатируют железо в ЖКТ, снижая абсорбцию на 60-90%"
+    advice: "Не пить чай/кофе за 1ч до и 2ч после приёма железа"
+    evidence: "A"
+
+  - pair: [iron, phytates]
+    type: antagonist
+    mechanism: "Фитиновая кислота (крупы, бобовые, орехи) связывает железо"
+    advice: "Замачивание/ферментация снижает фитаты. Вит С компенсирует"
+    evidence: "A"
+
+synergists:
+  - pair: [vitamin_c, iron]
+    type: synergist
+    mechanism: "Аскорбат восстанавливает Fe3+ → Fe2+ (усвояемая форма)"
+    advice: "75-100мг вит С вместе с железом повышает абсорбцию в 2-3 раза"
+    evidence: "A"
+
+  - pair: [vitamin_d, calcium]
+    type: synergist
+    mechanism: "D3 стимулирует экспрессию кальбиндина → абсорбция Ca"
+    advice: "При дефиците D кальций плохо усваивается"
+    evidence: "A"
+
+  - pair: [vitamin_d, magnesium]
+    type: synergist
+    mechanism: "Mg необходим для гидроксилирования D3 → 25-OH-D → 1,25-OH2-D"
+    advice: "Дефицит Mg = витамин D не активируется. Сначала Mg, потом D"
+    evidence: "B"
+
+  - pair: [vitamin_k2, vitamin_d]
+    type: synergist
+    mechanism: "K2 активирует остеокальцин и MGP, направляя Ca в кости (не в сосуды)"
+    advice: "При приёме D3 > 4000 МЕ добавлять K2 (MK-7) 100-200 мкг"
+    evidence: "B"
+
+  - pair: [vitamin_b12, folate]
+    type: synergist
+    mechanism: "Работают вместе в метаболизме гомоцистеина (метионин-синтаза)"
+    advice: "Дефицит одного маскирует дефицит другого. Проверять оба + гомоцистеин"
+    evidence: "A"
+
+  - pair: [copper, iron]
+    type: synergist
+    mechanism: "Церулоплазмин (Cu-зависимый) окисляет Fe2+ → Fe3+ для загрузки в трансферрин"
+    advice: "Дефицит Cu → анемия даже при нормальном железе"
+    evidence: "B"
+
+  - pair: [selenium, vitamin_e]
+    type: synergist
+    mechanism: "Оба антиоксиданта, Se в глутатионпероксидазе, E ловит радикалы в мембранах"
+    advice: "Работают эффективнее вместе"
+    evidence: "B"
+
+# ── Drug-nutrient depletions ──
+drug_depletions:
+  metformin:
+    depletes: [vitamin_b12, folate]
+    mechanism: "Нарушает Ca-зависимый транспорт B12 в подвздошной кишке"
+    monitoring: "B12 каждые 6 мес. Гомоцистеин. При дефиците — B12 сублингвально или инъекции"
+    evidence: "A"
+
+  proton_pump_inhibitors:
+    drugs: [omeprazole, pantoprazole, esomeprazole]
+    depletes: [magnesium, vitamin_b12, calcium, iron]
+    mechanism: "Снижение кислотности → нарушение абсорбции минералов и B12"
+    monitoring: "Mg, B12 ежегодно при длительном приёме. Fe при анемии"
+    evidence: "A"
+
+  statins:
+    drugs: [atorvastatin, rosuvastatin]
+    depletes: [coq10]
+    mechanism: "Ингибирование HMG-CoA редуктазы → снижение синтеза CoQ10"
+    monitoring: "CoQ10 100-200мг/день при приёме статинов. Миалгия = маркер"
+    evidence: "B"
+
+  oral_contraceptives:
+    depletes: [vitamin_b6, folate, magnesium, zinc, vitamin_c]
+    mechanism: "Множественные пути: повышенный метаболизм, снижение абсорбции"
+    monitoring: "Фолат обязателен, остальное по показаниям"
+    evidence: "B"
+
+  corticosteroids:
+    drugs: [prednisone, dexamethasone]
+    depletes: [calcium, vitamin_d, potassium, magnesium]
+    mechanism: "Снижение абсорбции Ca, повышение экскреции"
+    monitoring: "Кальций + D3 обязательно. Денситометрия при длительном приёме"
+    evidence: "A"
+
+# ── Drug-GI interactions ──
+drug_gi_effects:
+  glp1_agonists:
+    drugs: [semaglutide, tirzepatide, liraglutide]
+    gi_effects:
+      nausea: "44% (тирзепатид выше)"
+      constipation: "24%"
+      diarrhea: "30%"
+      vomiting: "24%"
+    mechanism: "Замедление опорожнения желудка (vagal inhibition) + центральная супрессия аппетита"
+    prevention:
+      - "Медленная титрация дозы (каждые 4 нед, не 2)"
+      - "Клетчатка 25-30г/день (растворимая: псиллиум)"
+      - "Магний цитрат 400-600мг/день (слабительный эффект)"
+      - "Вода ≥ 2.5л/день"
+      - "Мелкие частые приёмы пищи"
+      - "Исключить жирную/жареную пищу при тошноте"
+    serious_risks:
+      - "Панкреатит (редко, <1%). Сильная боль в животе → скорая"
+      - "Кишечная непроходимость (case reports). Длительный запор без лечения → хирургия"
+      - "Анальные трещины при хроническом запоре — до 20% хронических запоров"
+    evidence: "A"
+
+  nsaids:
+    drugs: [ibuprofen, diclofenac, naproxen]
+    gi_effects:
+      gastritis: "15-30%"
+      ulcers: "1-4% при длительном приёме"
+    prevention:
+      - "Принимать с едой"
+      - "PPI при длительном приёме"
+      - "Не сочетать с алкоголем"
+    evidence: "A"
+
+  oral_anabolics:
+    drugs: ["17α-алкилированные: оксандролон, станозолол, метандиенон"]
+    gi_effects:
+      hepatotoxicity: "доза-зависимая"
+      cholestasis: "при длительном приёме"
+    mechanism: "Первый печёночный метаболизм → прямое повреждение гепатоцитов"
+    prevention:
+      - "Ограничить курс до 6-8 недель"
+      - "УДХК (урсодезоксихолевая кислота) 500мг/день"
+      - "NAC 600мг 2р/день"
+      - "Контроль АЛТ/АСТ каждые 2 недели"
+    evidence: "B"

@@ -1,0 +1,9 @@
+.venv/
+.env
+data/
+logs/
+__pycache__/
+*.pyc
+*.pyo
+state.json
+news_cache.json

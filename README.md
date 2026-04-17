@@ -43,6 +43,12 @@ Personal health & fitness AI assistant for Telegram. Tracks lab results, analyze
 - **Unknown tracking** — new abbreviations become candidates for review
 - **74+ workout terms** seeded, growing with every training log
 
+### User Self-Registration
+- **No manual setup** — new user writes to the bot, admin gets a notification
+- **Works without @username** — phone-only Telegram accounts supported
+- **Admin approves** with `/approve <chat_id>` — user gets instant access
+- **Data isolation** — each user sees only their own data, shared glossary
+
 ### LLM-Powered Q&A
 - Ask any health question — the bot answers with your actual lab data, not generic advice
 - Full conversation context — remembers what you discussed
@@ -55,12 +61,18 @@ Personal health & fitness AI assistant for Telegram. Tracks lab results, analyze
 Telegram Message
   |
   v
+Auth (users.yaml) ── unknown? → access request → admin /approve
+  |
+  v
 Universal Classifier (Python, no LLM)
   |
   +---> Medical data --> LLM extraction --> ClickHouse
   +---> Workout log  --> LLM parser + glossary --> Analytics --> ClickHouse
   +---> Reminder     --> Natural language parser --> Scheduler
   +---> Question     --> LLM Q&A with full health context
+  |
+  v
+Global Glossary (auto-learning from every interaction)
 ```
 
 - **Storage:** ClickHouse (lab_results, training_entries, nutrition_log, glossary_terms, ...)
@@ -131,6 +143,7 @@ All features work from free chat text. Commands are optional shortcuts:
 | `/weight` | Log body weight |
 | `/remind` | Manage reminders |
 | `/glossary` | Bot knowledge base |
+| `/approve <id>` | Admin: approve new user |
 | `/report` | PDF report for doctor |
 | `/search <query>` | Full-text search |
 | `/summary` | Overall health assessment |

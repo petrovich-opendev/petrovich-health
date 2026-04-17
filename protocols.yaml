@@ -1,0 +1,592 @@
+# Peptide & Hormone Protocol Knowledge Base
+# Source: clinical guidelines, pharmacokinetic studies, sports medicine literature
+# NOT medical advice — reference data for informed discussion with physician
+
+compounds:
+  # ── Testosterone ──
+  testosterone_enanthate:
+    name: Тестостерон энантат
+    class: androgen
+    half_life_days: 4.5
+    peak_days: 2-3
+    routes: [IM, SubQ]
+    protocols:
+      trt:
+        purpose: Заместительная терапия (TRT)
+        dose_range_mg_week: [100, 200]
+        typical_mg_week: 150
+        frequency: "каждые 3.5-7 дней"
+        target_total_t_nmol: [15, 30]  # целевой уровень общего тестостерона
+        target_free_t_pmol: [300, 700]
+        notes: "Цель — физиологический диапазон. Доза подбирается по анализам через 6-8 недель"
+      cruise:
+        purpose: Круиз (между курсами)
+        dose_range_mg_week: [150, 200]
+        typical_mg_week: 175
+        frequency: "каждые 3.5 дня"
+        notes: "Физиологическая доза, минимизация побочек"
+      blast:
+        purpose: Бластинг (массонабор)
+        dose_range_mg_week: [300, 500]
+        typical_mg_week: 400
+        frequency: "каждые 3.5 дня"
+        duration_weeks: [8, 16]
+        notes: "Супрафизиологические дозы. Обязательный контроль: гематокрит, эстрадиол, печёночные"
+    monitoring:
+      mandatory:
+        - biomarker: Тестостерон общий
+          when: "через 6-8 недель после старта/смены дозы, забор утром через 2-3 дня после инъекции"
+          frequency: "каждые 3-6 мес на стабильной дозе"
+        - biomarker: Эстрадиол (E2)
+          when: "вместе с тестостероном"
+          target_range: [20, 50] # пг/мл
+          unit: пг/мл
+          notes: "Выше 50 — рассмотреть AI. Ниже 20 — слишком сильный AI, суставы, либидо"
+        - biomarker: Гематокрит
+          when: "каждые 3-6 мес"
+          alert_above: 54 # %
+          unit: "%"
+          notes: "Выше 54% — риск тромбоза. Донорство крови или снижение дозы"
+        - biomarker: ПСА
+          when: "ежегодно, мужчины >40"
+          alert_above: 4.0
+          unit: нг/мл
+      recommended:
+        - biomarker: ГСПГ (SHBG)
+          notes: "Влияет на свободный тестостерон. Низкий ГСПГ = больше свободного Т при той же дозе"
+        - biomarker: ЛГ
+          notes: "На TRT/бласте будет подавлен (около 0). Норма"
+        - biomarker: ФСГ
+          notes: "На TRT/бласте будет подавлен. Для фертильности — добавить ХГЧ"
+        - biomarker: Пролактин
+          notes: "Может расти на высоких дозах. Выше 30 нг/мл — рассмотреть каберголин"
+
+  testosterone_cypionate:
+    name: Тестостерон ципионат
+    class: androgen
+    half_life_days: 5.0
+    peak_days: 2-3
+    routes: [IM, SubQ]
+    notes: "Практически идентичен энантату. Разница в полупериоде ~0.5 дня — клинически незначима"
+    protocols:
+      trt:
+        dose_range_mg_week: [100, 200]
+        typical_mg_week: 150
+
+  # ── Growth Hormone ──
+  hgh:
+    name: Гормон роста (HGH/соматропин)
+    class: growth_hormone
+    half_life_hours: 3-4
+    routes: [SubQ]
+    protocols:
+      anti_aging:
+        purpose: Антивозрастной / общее здоровье
+        dose_range_iu_day: [1, 3]
+        typical_iu_day: 2
+        frequency: "ежедневно, утро или перед сном"
+        notes: "Низкие дозы — минимум побочек, улучшение сна, кожи, восстановления"
+      fat_loss:
+        purpose: Жиросжигание
+        dose_range_iu_day: [2, 4]
+        typical_iu_day: 3
+        frequency: "ежедневно утром натощак"
+        notes: "Не есть 30-60 мин после инъекции (ГР повышает глюкозу)"
+      muscle_growth:
+        purpose: Массонабор (с АС)
+        dose_range_iu_day: [4, 8]
+        typical_iu_day: 5
+        frequency: "ежедневно, можно разбить на 2 инъекции"
+        duration_months: [3, 6]
+        notes: "Выше 4 ЕД — контроль глюкозы и ИФР-1 обязателен"
+    monitoring:
+      mandatory:
+        - biomarker: ИФР-1 (IGF-1)
+          when: "через 4-6 недель после старта"
+          target_range: [200, 350]  # нг/мл, возрастная норма 40-50 лет
+          unit: нг/мл
+          notes: "Основной маркер ответа на ГР. Выше 400 — снизить дозу"
+        - biomarker: Глюкоза натощак
+          when: "каждые 3 мес"
+          alert_above: 6.1
+          unit: ммоль/л
+          notes: "ГР = контринсулярный гормон. Может вызвать инсулинорезистентность"
+        - biomarker: HbA1c (гликированный гемоглобин)
+          when: "каждые 3-6 мес"
+          alert_above: 6.0
+          unit: "%"
+      recommended:
+        - biomarker: Инсулин натощак
+          notes: "Повышается на ГР. Выше 25 мкМЕ/мл — инсулинорезистентность"
+        - biomarker: ТТГ (TSH)
+          notes: "ГР может снижать конверсию T4→T3. Контролировать щитовидку"
+
+  # ── Peptides ──
+  bpc_157:
+    name: BPC-157 (Body Protection Compound)
+    class: peptide_healing
+    half_life_hours: 4
+    routes: [SubQ, oral]
+    protocols:
+      healing:
+        purpose: Заживление травм, ЖКТ, связки
+        dose_range_mcg_day: [200, 600]
+        typical_mcg_day: 250
+        frequency: "2 раза в день (утро + вечер), SubQ рядом с травмой"
+        duration_weeks: [4, 8]
+        notes: "Можно инъекцией рядом с травмой или системно. Орально — для ЖКТ"
+    monitoring:
+      recommended:
+        - biomarker: "Нет обязательных"
+          notes: "Низкий профиль побочек. Контроль общий при курсах >8 недель"
+
+  tb_500:
+    name: TB-500 (Thymosin Beta-4)
+    class: peptide_healing
+    half_life_hours: 6-8
+    routes: [SubQ]
+    protocols:
+      healing:
+        purpose: Системное заживление, воспаление
+        dose_range_mg_week: [2.0, 5.0]
+        typical_mg_week: 2.5
+        loading_dose_mg: 5.0
+        loading_weeks: 4
+        maintenance_mg_week: 2.5
+        frequency: "2 раза в неделю"
+        duration_weeks: [4, 12]
+        notes: "Загрузочная фаза 4 недели, потом поддержка"
+
+  cjc_1295_dac:
+    name: CJC-1295 DAC (с Drug Affinity Complex)
+    class: ghrh_analog
+    half_life_days: 6-8
+    routes: [SubQ]
+    protocols:
+      gh_release:
+        purpose: Стимуляция секреции ГР
+        dose_range_mcg_week: [1000, 2000]
+        typical_mcg_week: 2000
+        frequency: "1-2 раза в неделю"
+        notes: "Длинный период полураспада. Не комбинировать с экзогенным ГР"
+    monitoring:
+      mandatory:
+        - biomarker: ИФР-1 (IGF-1)
+          when: "через 4 недели"
+          notes: "Основной маркер ответа"
+
+  cjc_1295_no_dac:
+    name: CJC-1295 без DAC (Mod GRF 1-29)
+    class: ghrh_analog
+    half_life_minutes: 30
+    routes: [SubQ]
+    protocols:
+      gh_pulse:
+        purpose: Импульсная стимуляция ГР
+        dose_range_mcg_injection: [100, 200]
+        typical_mcg: 100
+        frequency: "2-3 раза в день, натощак"
+        notes: "Лучше в комбинации с GHRP (ипаморелин). Синергия"
+
+  ipamorelin:
+    name: Ипаморелин
+    class: ghrp
+    half_life_hours: 2
+    routes: [SubQ]
+    protocols:
+      gh_pulse:
+        purpose: Стимуляция ГР (мягкий GHRP)
+        dose_range_mcg_injection: [100, 300]
+        typical_mcg: 200
+        frequency: "2-3 раза в день, натощак"
+        notes: "Самый чистый GHRP — не повышает кортизол, пролактин, грелин. Идеален в комбо с CJC-1295 no DAC"
+    monitoring:
+      recommended:
+        - biomarker: ИФР-1 (IGF-1)
+        - biomarker: Глюкоза натощак
+
+  ghrp_6:
+    name: GHRP-6
+    class: ghrp
+    half_life_hours: 2-3
+    routes: [SubQ]
+    protocols:
+      gh_release:
+        dose_range_mcg_injection: [100, 200]
+        typical_mcg: 100
+        frequency: "2-3 раза в день, натощак"
+        notes: "Сильно повышает аппетит (грелин). Хорош для массонабора, плох для сушки"
+
+  ghrp_2:
+    name: GHRP-2
+    class: ghrp
+    half_life_hours: 1-2
+    routes: [SubQ]
+    protocols:
+      gh_release:
+        dose_range_mcg_injection: [100, 300]
+        typical_mcg: 200
+        frequency: "2-3 раза в день"
+        notes: "Умеренное повышение аппетита, кортизола, пролактина"
+
+  # ── Peptides — GH Secretagogues ──
+  sermorelin:
+    name: Серморелин (GHRH 1-29)
+    class: ghrh_analog
+    half_life_minutes: 10-20
+    routes: [SubQ]
+    protocols:
+      gh_release:
+        purpose: Стимуляция секреции ГР (FDA-approved)
+        dose_range_mcg_day: [200, 500]
+        typical_mcg: 300
+        frequency: "перед сном, натощак"
+        notes: "Одобрен FDA. Короткий T½ — нужна ежедневная инъекция. Слабее CJC-1295"
+
+  tesamorelin:
+    name: Тесаморелин (Egrifta)
+    class: ghrh_analog
+    half_life_minutes: 26-38
+    routes: [SubQ]
+    protocols:
+      lipodystrophy:
+        purpose: Снижение висцерального жира (FDA-approved для HIV-липодистрофии)
+        dose_mg_day: 2.0
+        frequency: "ежедневно"
+        notes: "FDA-approved. Эффективен для висцерального жира. Дорогой"
+
+  hexarelin:
+    name: Гексарелин
+    class: ghrp
+    half_life_hours: 1-2
+    routes: [SubQ]
+    protocols:
+      gh_release:
+        dose_range_mcg_injection: [100, 200]
+        typical_mcg: 200
+        frequency: "2-3 раза в день"
+        notes: "Самый мощный GHRP по выбросу ГР. Но десенситизация за 2-4 нед. Повышает кортизол и пролактин"
+
+  mk_677:
+    name: MK-677 (Ибутаморен)
+    class: ghs_oral
+    half_life_hours: 24
+    routes: [oral]
+    protocols:
+      gh_release:
+        purpose: Оральный стимулятор ГР
+        dose_range_mg_day: [10, 25]
+        typical_mg_day: 15
+        frequency: "1 раз в день, вечер"
+        duration_months: [3, 12]
+        notes: "Не пептид (малая молекула), но работает как GHRP. Сильно повышает аппетит и задержку воды. Инсулинорезистентность на длинных курсах"
+    monitoring:
+      mandatory:
+        - biomarker: ИФР-1 (IGF-1)
+        - biomarker: Глюкоза натощак
+        - biomarker: Инсулин натощак
+
+  # ── Peptides — Healing & Recovery ──
+  ghk_cu:
+    name: GHK-Cu (медный пептид)
+    class: peptide_healing
+    half_life_hours: 1-2
+    routes: [SubQ, topical]
+    protocols:
+      skin_healing:
+        purpose: Регенерация кожи, заживление, коллаген
+        dose_range_mcg_day: [200, 500]
+        typical_mcg: 200
+        frequency: "1-2 раза в день SubQ, или топикально (кремы)"
+        notes: "Стимулирует коллаген, стволовые клетки кожи. Местно — морщины, раны. Системно — общий anti-aging"
+
+  pentosan_polysulfate:
+    name: Пентосан полисульфат (Cartrophen)
+    class: gag_analog
+    half_life_hours: 24
+    routes: [SubQ, IM]
+    protocols:
+      joint_repair:
+        purpose: Суставы, хрящ, остеоартрит
+        dose_mg: 2-3
+        frequency: "1 раз в неделю, курс 4-6 инъекций"
+        notes: "Ветеринарный препарат для суставов лошадей/собак. Широко используется в спортивной медицине. Антикоагулянтный эффект"
+
+  aod_9604:
+    name: AOD-9604
+    class: peptide_fat_loss
+    half_life_hours: 1-2
+    routes: [SubQ]
+    protocols:
+      fat_loss:
+        purpose: Жиросжигание (фрагмент ГР)
+        dose_range_mcg_day: [250, 500]
+        typical_mcg: 300
+        frequency: "1 раз утром натощак"
+        notes: "Фрагмент HGH (176-191). Липолитик без влияния на глюкозу и рост. Эффективность спорная"
+
+  # ── Peptides — Cognitive & Neuroprotection ──
+  selank:
+    name: Селанк
+    class: peptide_nootropic
+    half_life_minutes: 2-3
+    routes: [intranasal, SubQ]
+    protocols:
+      cognitive:
+        purpose: Анксиолитик, ноотроп, иммуномодулятор
+        dose_range_mcg_day: [250, 750]
+        typical_mcg: 400
+        frequency: "2-3 раза в день интраназально"
+        notes: "Российская разработка (ИФА РАН). Аналог тафтсина. Анксиолитик без седации. Курс 2-4 недели"
+
+  semax:
+    name: Семакс
+    class: peptide_nootropic
+    half_life_minutes: 2-3
+    routes: [intranasal]
+    protocols:
+      cognitive:
+        purpose: Ноотроп, нейропротектор
+        dose_range_mcg_day: [200, 600]
+        typical_mcg: 400
+        frequency: "2-3 раза в день интраназально"
+        notes: "Российская разработка. Аналог АКТГ 4-10. Улучшает память, внимание, нейропластичность. Курс 2-4 недели"
+
+  dihexa:
+    name: Дигекса
+    class: peptide_nootropic
+    half_life_hours: 6-12
+    routes: [SubQ, oral]
+    protocols:
+      cognitive:
+        purpose: Мощный ноотроп (HGF активатор)
+        dose_range_mg_day: [5, 20]
+        typical_mg: 10
+        frequency: "1 раз в день"
+        notes: "В 10 млн раз мощнее BDNF в стимуляции нейронных связей (in vitro). Мало клинических данных. Осторожно с длинными курсами — влияние на рост клеток"
+
+  # ── Peptides — Skin & Tanning ──
+  melanotan_2:
+    name: Мелатонан II (MT-2)
+    class: melanocortin
+    half_life_hours: 1-2
+    routes: [SubQ]
+    protocols:
+      tanning:
+        purpose: Загар, либидо
+        dose_range_mcg: [100, 500]
+        loading_mcg: "250 мкг через день, 2-3 недели"
+        maintenance_mcg: "500 мкг перед УФ"
+        notes: "Загар без солнца. Побочки: тошнота (особенно начало), родинки. Проверять кожу на меланому"
+
+  # ── Peptides — Immune & Longevity ──
+  thymosin_alpha_1:
+    name: Тимозин альфа-1 (Zadaxin)
+    class: peptide_immune
+    half_life_hours: 2
+    routes: [SubQ]
+    protocols:
+      immune:
+        purpose: Иммуномодуляция (FDA orphan drug для гепатита B)
+        dose_mg: 1.6
+        frequency: "2 раза в неделю"
+        duration_weeks: [4, 24]
+        notes: "Усиливает Т-клеточный иммунитет. Используется при хронических инфекциях, иммунодефиците, онкологии (адъювант)"
+
+  epithalon:
+    name: Эпиталон (Epithalon)
+    class: peptide_longevity
+    half_life_hours: 2-4
+    routes: [SubQ]
+    protocols:
+      anti_aging:
+        purpose: Теломеразная активация, anti-aging
+        dose_range_mg_day: [5, 10]
+        typical_mg: 5
+        frequency: "ежедневно, курс 10-20 дней"
+        cycles_per_year: 2-3
+        notes: "Разработка СПбИ биорегуляции и геронтологии (Хавинсон). Активирует теломеразу. Клинических данных мало, но исследования на животных обнадёживают"
+
+  ll_37:
+    name: LL-37 (Кателицидин)
+    class: peptide_antimicrobial
+    half_life_hours: 4-6
+    routes: [SubQ, topical]
+    protocols:
+      antimicrobial:
+        purpose: Антимикробный, заживление, биоплёнки
+        dose_range_mcg_day: [50, 200]
+        typical_mcg: 100
+        frequency: "ежедневно, SubQ рядом с проблемой"
+        duration_weeks: [2, 6]
+        notes: "Эндогенный антимикробный пептид. Разрушает бактериальные биоплёнки. Полезен при хронических инфекциях, Лайме"
+
+  # ── Peptides — Metabolic ──
+  mots_c:
+    name: MOTS-c (митохондриальный пептид)
+    class: peptide_metabolic
+    half_life_hours: 12-24
+    routes: [SubQ]
+    protocols:
+      metabolic:
+        purpose: Инсулиночувствительность, жиросжигание, exercise mimetic
+        dose_range_mg_week: [5, 15]
+        typical_mg_week: 10
+        frequency: "3-5 раз в неделю"
+        notes: "Митохондриальный пептид. Улучшает метаболизм глюкозы, имитирует эффект упражнений. Ранние исследования"
+
+  ss_31:
+    name: SS-31 (Elamipretide)
+    class: peptide_mitochondrial
+    half_life_hours: 4
+    routes: [SubQ]
+    protocols:
+      mitochondrial:
+        purpose: Митохондриальная дисфункция, кардиозащита
+        dose_mg_day: "0.05 мг/кг"
+        frequency: "ежедневно"
+        notes: "Проникает в митохондрии, стабилизирует кардиолипин. Клинические испытания при сердечной недостаточности и миопатиях"
+
+  # ── Peptides — Sexual Function ──
+  pt_141:
+    name: PT-141 (Бремеланотид)
+    class: melanocortin_receptor
+    half_life_hours: 2-3
+    routes: [SubQ]
+    protocols:
+      libido:
+        purpose: Либидо / эректильная функция
+        dose_range_mg: [0.5, 2.0]
+        typical_mg: 1.5
+        frequency: "по запросу, за 2-4 часа до"
+        max_per_month: 8
+        notes: "Не чаще 1 раза в 24ч. Побочки: тошнота, прилив к лицу. Начинать с 0.5 мг"
+
+  # ── Ancillaries ──
+  anastrozole:
+    name: Анастрозол (Аримидекс)
+    class: aromatase_inhibitor
+    half_life_days: 2
+    routes: [oral]
+    protocols:
+      estrogen_control:
+        purpose: Контроль эстрадиола на ТЗТ/бласте
+        dose_range_mg_week: [0.25, 1.0]
+        typical_mg: "0.25-0.5 мг 2 раза в неделю"
+        notes: "ТОЛЬКО по анализам! Не профилактически. E2 целевой 20-50 пг/мл. Передозировка AI хуже высокого E2"
+    monitoring:
+      mandatory:
+        - biomarker: Эстрадиол (E2)
+          when: "через 2-3 недели после старта/смены дозы"
+          notes: "Ниже 20 пг/мл = убитый эстрадиол. Суставы, либидо, настроение, кости"
+
+  exemestane:
+    name: Экземестан (Аромазин)
+    class: aromatase_inhibitor
+    half_life_hours: 24
+    routes: [oral]
+    protocols:
+      estrogen_control:
+        dose_range_mg_week: [12.5, 25]
+        typical_mg: "12.5 мг через день или 2 раза в неделю"
+        notes: "Суицидальный AI (необратимая инактивация). Мягче анастрозола, не так убивает E2"
+
+  hcg:
+    name: ХГЧ (хорионический гонадотропин)
+    class: gonadotropin
+    half_life_hours: 33
+    routes: [SubQ, IM]
+    protocols:
+      trt_adjunct:
+        purpose: Поддержка яичек на ТЗТ + фертильность
+        dose_range_iu_week: [500, 1500]
+        typical_iu: "250-500 ЕД 2-3 раза в неделю"
+        notes: "Предотвращает атрофию яичек на ТЗТ. Поддерживает интратестикулярный тестостерон"
+      pct:
+        purpose: PCT (Post Cycle Therapy)
+        dose_iu: "1500-2000 ЕД через день, 2 недели"
+        notes: "Перед SERMs. Восстанавливает объём яичек"
+    monitoring:
+      recommended:
+        - biomarker: Эстрадиол (E2)
+          notes: "ХГЧ ароматизируется. Может потребоваться AI"
+
+  tamoxifen:
+    name: Тамоксифен (Нолвадекс)
+    class: serm
+    half_life_days: 5-7
+    routes: [oral]
+    protocols:
+      pct:
+        purpose: PCT
+        dose_mg_day: "20 мг/день 4-6 недель"
+        notes: "Начинать через 2 недели после последней инъекции энантата (5 полупериодов)"
+      gyno_prevention:
+        purpose: Профилактика гинекомастии
+        dose_mg_day: "10-20 мг/день"
+        notes: "Блокирует рецепторы эстрогена в грудной ткани. Не снижает уровень E2"
+
+  clomiphene:
+    name: Кломифен (Кломид)
+    class: serm
+    half_life_days: 5
+    routes: [oral]
+    protocols:
+      pct:
+        purpose: PCT / восстановление оси ГГГ
+        dose_mg_day: "50 мг/день 4 недели, затем 25 мг/день 2 недели"
+        notes: "Стимулирует ЛГ/ФСГ. Побочки: зрение, настроение"
+      monotherapy:
+        purpose: Альтернатива ТЗТ (монотерапия)
+        dose_mg_day: "25-50 мг через день"
+        notes: "Поднимает тестостерон сохраняя фертильность. Для мужчин планирующих зачатие"
+
+# ── Dosing formulas ──
+dosing_rules:
+  testosterone_mg_to_concentration:
+    description: "Примерный расчёт уровня тестостерона от дозы (индивидуально ±30%)"
+    formula: "total_T (нмоль/л) ≈ dose_mg_week × 0.12-0.18 (средний респондер)"
+    notes: "100 мг/нед → ~12-18 нмоль/л, 200 мг/нед → ~24-36 нмоль/л. Забор через 48-72ч после инъекции (trough)"
+
+  peptide_reconstitution:
+    description: "Разведение пептидов бактериостатической водой"
+    formula: "концентрация (мкг/тик) = масса_пептида_мкг / объём_воды_мл / 100 (при инсулиновом шприце U100)"
+    example: "5 мг BPC-157 + 2 мл воды = 5000/200 = 25 мкг/тик. Для дозы 250 мкг = 10 тиков"
+
+  half_life_clearance:
+    description: "Время полного выведения ≈ 5 × half-life"
+    formula: "PCT начинать через 5 × T½ после последней инъекции"
+    example: "Тест энантат T½=4.5 дня → PCT через ~22 дня (≈3 недели)"
+
+# ── Common stacks ──
+stacks:
+  trt_basic:
+    name: "Базовый ТЗТ"
+    compounds: [testosterone_enanthate, hcg]
+    protocol: "Тест-Э 150 мг/нед + ХГЧ 500 ЕД 2р/нед"
+    monitoring_interval_weeks: 8
+
+  blast_moderate:
+    name: "Умеренный бласт (массонабор)"
+    compounds: [testosterone_enanthate, hgh, anastrozole]
+    protocol: "Тест-Э 400 мг/нед + ГР 4 ЕД/день + AI по анализам"
+    duration_weeks: 12
+    monitoring: "Кровь на 4 и 8 неделе: тестостерон, E2, гематокрит, печёночные, глюкоза"
+
+  healing_stack:
+    name: "Восстановление после травмы"
+    compounds: [bpc_157, tb_500]
+    protocol: "BPC-157 250 мкг 2р/день SubQ + TB-500 2.5 мг 2р/нед"
+    duration_weeks: 6
+
+  gh_peptide_combo:
+    name: "Пептидный ГР (альтернатива экзогенному)"
+    compounds: [cjc_1295_no_dac, ipamorelin]
+    protocol: "CJC-1295 noDAC 100 мкг + Ипаморелин 200 мкг, 2-3р/день натощак"
+    notes: "Синергия GHRH+GHRP. Дешевле экзогенного ГР, более физиологичный выброс"
+
+  pct_standard:
+    name: "Стандартный PCT"
+    compounds: [hcg, tamoxifen, clomiphene]
+    protocol: "ХГЧ 1500 ЕД через день 2 нед → Тамоксифен 20мг + Кломид 50мг 4 нед → Тамокс 10мг + Кломид 25мг 2 нед"
+    start: "через 3 недели после последней инъекции тест-энантата"

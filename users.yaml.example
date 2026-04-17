@@ -1,0 +1,8 @@
+users:
+- username: your_telegram_username
+  name: Your Name
+  role: admin
+  chat_id:  # auto-filled on first message
+- username: family_member
+  name: Name
+  role: user

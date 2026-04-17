@@ -1,0 +1,217 @@
+# Workout Abbreviation Glossary — adaptive, auto-enriched
+# Bot reads this before LLM parsing. Unknown terms get added to unknown_terms list.
+# User confirms → glossary grows.
+
+# --- Effort / RPE levels ---
+effort_levels:
+  ЛГ:
+    full: "легко"
+    en: "easy"
+    rpe: "5-6"
+  СР:
+    full: "средне"
+    en: "moderate"
+    rpe: "7-8"
+  ТЖ:
+    full: "тяжело"
+    en: "hard"
+    rpe: "9"
+  СМСТ:
+    full: "средне-сложно"
+    en: "moderate-hard"
+    rpe: "8"
+  отказ:
+    full: "до мышечного отказа"
+    en: "to failure"
+    rpe: "10"
+
+# --- Rep quality modifiers ---
+rep_modifiers:
+  Ф:
+    full: "с фиксатором / помощью"
+    en: "assisted / fixed"
+  Ч:
+    full: "чистый (строгая техника)"
+    en: "strict form"
+  Ж:
+    full: "жимовой (с инерцией жима)"
+    en: "push-assisted"
+  К:
+    full: "с читингом / кривой"
+    en: "cheat rep"
+  "0":
+    full: "без дополнительного веса"
+    en: "bodyweight only"
+  М:
+    full: "максимум / до отказа"
+    en: "to failure / max reps"
+
+# --- Grip types ---
+grip_types:
+  ШХ:
+    full: "широкий хват"
+    en: "wide grip"
+  НХ:
+    full: "нейтральный хват"
+    en: "neutral grip"
+  УХ:
+    full: "узкий хват"
+    en: "close grip"
+  ОХ:
+    full: "обратный хват"
+    en: "reverse grip"
+  ПХ:
+    full: "прямой хват"
+    en: "pronated grip"
+
+# --- Exercise abbreviations ---
+exercise_abbrevs:
+  ГТ:
+    full: "горизонтальная тяга"
+    en: "seated cable row"
+  ВТ:
+    full: "вертикальная тяга"
+    en: "lat pulldown"
+  ПНБ:
+    full: "подъём на бицепс"
+    en: "bicep curl"
+  РТ:
+    full: "рычажная тяга"
+    en: "lever row"
+  ЖЛ:
+    full: "жим лёжа"
+    en: "bench press"
+  ЖС:
+    full: "жим стоя / армейский жим"
+    en: "overhead press"
+  ЖН:
+    full: "жим ногами"
+    en: "leg press"
+  ПР:
+    full: "приседания"
+    en: "squat"
+  СТ:
+    full: "становая тяга"
+    en: "deadlift"
+  РП:
+    full: "разведение / пек-дек"
+    en: "pec deck / fly"
+  ФП:
+    full: "французский жим"
+    en: "skull crusher / french press"
+  ПВ:
+    full: "подъём на возвышение"
+    en: "step up"
+  СШНС:
+    full: "приседания в Смите с наклонной спинкой"
+    en: "Smith machine squat"
+  РГС:
+    full: "рычажный гакк-присед"
+    en: "lever hack squat"
+  СГЛ:
+    full: "сгибание ног лёжа"
+    en: "lying leg curl"
+  СГС:
+    full: "сгибание ног сидя"
+    en: "seated leg curl"
+  РГН:
+    full: "разгибание ног"
+    en: "leg extension"
+  ККП:
+    full: "кранчи на блоке (кабельные)"
+    en: "cable crunch"
+  ПНН:
+    full: "подъём ног в упоре"
+    en: "leg raise"
+  ИП:
+    full: "икры в платформе / подъёмы на носки"
+    en: "calf raise"
+
+# --- Equipment / stance modifiers ---
+equipment:
+  СВ:
+    full: "свободный вес"
+    en: "free weight"
+  БЛ:
+    full: "блочный тренажёр"
+    en: "cable machine"
+  ГА:
+    full: "гантели"
+    en: "dumbbells"
+  ШТ:
+    full: "штанга"
+    en: "barbell"
+  РЗ:
+    full: "резина / эспандер"
+    en: "resistance band"
+
+# --- Set notation patterns ---
+set_notation:
+  "2С|3П":
+    full: "2 суперсета по 3 подхода"
+    en: "2 supersets of 3 sets"
+  "х3":
+    full: "3 подхода (одинаковых)"
+    en: "3 sets (same)"
+  "+25кг/10":
+    full: "+25 кг на 10 повторений"
+    en: "+25 kg for 10 reps"
+  "10 х3":
+    full: "10 повторений, 3 подхода"
+    en: "10 reps, 3 sets"
+
+# --- Muscle groups (Russian → English canonical) ---
+muscle_groups:
+  СПИНА: "back"
+  ГРУДЬ: "chest"
+  НОГИ: "legs"
+  ПЛЕЧИ: "shoulders"
+  БИЦЕПС: "biceps"
+  ТРИЦЕПС: "triceps"
+  ПРЕСС: "abs"
+  ПРЕДПЛЕЧЬЯ: "forearms"
+  ИКРЫ: "calves"
+  ЯГОДИЦЫ: "glutes"
+  ТРАПЕЦИЯ: "traps"
+  ДЕЛЬТЫ: "delts"
+
+# --- Technique / tempo modifiers ---
+technique:
+  СМВ:
+    full: "статодинамика медленных волокон (метод Селуянова) — малый вес 20-60% 1RM, медленный темп, 15-25 повторов, 40-50 сек под нагрузкой"
+    en: "slow muscle fiber training (Seluyanov method) — slow tempo, partial ROM, constant tension"
+  "4ст":
+    full: "4 ступени — дропсет/стрип-сет со снижением веса на ~20% за ступень, без паузы"
+    en: "4-step drop set — reduce weight ~20% each step, no rest"
+  пружина:
+    full: "пружинящие движения в конечной точке амплитуды"
+    en: "bouncing/pulsing reps at end range"
+
+# --- Stance / position modifiers ---
+stance:
+  "А/М":
+    full: "регулировка валика/сиденья — размер A или M"
+    en: "pad/seat adjustment — size A or M"
+  "B/XL":
+    full: "регулировка валика/сиденья — размер B или XL"
+    en: "pad/seat adjustment — size B or XL"
+  СВОБОДНО:
+    full: "свободный вес (не в тренажёре)"
+    en: "free weight (not machine)"
+
+# --- Section markers ---
+section_markers:
+  РАЗМИНКА: "warmup"
+  ЗАМИНКА: "cooldown"
+  РАСТЯЖКА: "stretching"
+  КАРДИО: "cardio"
+
+# --- Day abbreviations ---
+days:
+  ПН: "понедельник"
+  ВТ: "вторник"
+  СР: "среда"
+  ЧТ: "четверг"
+  ПТ: "пятница"
+  СБ: "суббота"
+  ВС: "воскресенье"

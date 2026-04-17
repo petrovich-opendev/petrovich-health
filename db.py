@@ -295,10 +295,11 @@ def query_for_llm_context(question: str, owner_id: str = "524605979") -> str:
 
     client = get_client()
 
+    # ── All results (no hard limit — user has real history) ──
     latest = client.query(
         f"SELECT collected_at, category, biomarker, value, unit, ref_low, ref_high, is_abnormal "
         f"FROM lab_results WHERE {_own(owner_id)} "
-        f"ORDER BY collected_at DESC, biomarker LIMIT 60"
+        f"ORDER BY collected_at DESC, biomarker LIMIT 500"
     )
     latest_lines = []
     for row in latest.result_rows:
@@ -308,10 +309,46 @@ def query_for_llm_context(question: str, owner_id: str = "524605979") -> str:
             ref = f" (норма: {row[5] or '?'}–{row[6] or '?'})"
         latest_lines.append(f"  {row[0]} | {row[1]} | {row[2]}: {row[3]} {row[4]}{ref}{flag}")
 
+    # ── Dynamics: biomarkers with ≥2 measurements, show trend ──
+    dynamics = client.query(
+        f"SELECT biomarker, "
+        f"  groupArray(collected_at) as dates, "
+        f"  groupArray(value) as vals, "
+        f"  groupArray(unit) as units, "
+        f"  any(ref_low) as ref_low, "
+        f"  any(ref_high) as ref_high, "
+        f"  count() as cnt "
+        f"FROM lab_results WHERE {_own(owner_id)} "
+        f"GROUP BY biomarker HAVING cnt >= 2 "
+        f"ORDER BY biomarker"
+    )
+    dynamics_lines = []
+    for row in dynamics.result_rows:
+        bm, dates, vals, units, ref_low, ref_high, cnt = row
+        unit = units[0] if units else ""
+        ref = ""
+        if ref_low is not None or ref_high is not None:
+            ref = f" (норма: {ref_low or '?'}–{ref_high or '?'})"
+
+        # Build trend line: date1=val1 → date2=val2 → ...
+        points = sorted(zip(dates, vals))
+        trend_parts = [f"{d}={v}" for d, v in points]
+
+        # Direction
+        first_val, last_val = points[0][1], points[-1][1]
+        diff = last_val - first_val
+        pct = (diff / first_val * 100) if first_val != 0 else 0
+        arrow = "↑" if diff > 0 else "↓" if diff < 0 else "→"
+
+        dynamics_lines.append(
+            f"  {bm} {unit}{ref}: {' → '.join(trend_parts)} "
+            f"[{arrow} {diff:+.1f} ({pct:+.0f}%), {cnt} замеров]"
+        )
+
     abnormal = client.query(
         f"SELECT collected_at, biomarker, value, unit, ref_low, ref_high "
         f"FROM lab_results WHERE {_own(owner_id)} AND is_abnormal = true "
-        f"ORDER BY collected_at DESC LIMIT 30"
+        f"ORDER BY collected_at DESC LIMIT 50"
     )
     abnormal_lines = []
     for row in abnormal.result_rows:
@@ -337,7 +374,13 @@ def query_for_llm_context(question: str, owner_id: str = "524605979") -> str:
         f"=== БАЗА ===\nЗаписей: {stats['total_records']}, "
         f"период: {stats['earliest_date']}—{stats['latest_date']}, "
         f"показателей: {stats['unique_biomarkers']}, файлов: {stats['unique_files']}")
-    sections.append(f"=== РЕЗУЛЬТАТЫ ===\n{chr(10).join(latest_lines) or '(нет)'}")
+
+    if dynamics_lines:
+        sections.append(
+            f"=== ДИНАМИКА (показатели с ≥2 замерами) ===\n"
+            + chr(10).join(dynamics_lines))
+
+    sections.append(f"=== ВСЕ РЕЗУЛЬТАТЫ ===\n{chr(10).join(latest_lines) or '(нет)'}")
     sections.append(f"=== ВНЕ НОРМЫ ===\n{chr(10).join(abnormal_lines) or '(в норме)'}")
     sections.append(f"=== ДОКУМЕНТЫ ===\n{chr(10).join(doc_lines) or '(нет)'}")
 

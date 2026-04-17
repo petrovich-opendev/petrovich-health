@@ -704,7 +704,14 @@ def process_workout_data(
     log.info("Stored workout entry %s (date=%s, muscles=%s, owner=%s)",
              entry_id[:8], workout_date, muscle_groups, owner_id)
 
-    # Auto-learn unknown terms — save for future prompt
+    # Auto-learn to global glossary
+    try:
+        from glossary import learn_from_workout
+        from db import get_client
+        learn_from_workout(get_client(), parsed)
+    except Exception as exc:
+        log.warning("Glossary learn from workout failed: %s", exc)
+
     unknown = parsed.get("unknown_terms", [])
     if unknown:
         log.info("Unknown workout terms: %s", unknown)

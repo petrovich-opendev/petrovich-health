@@ -52,6 +52,10 @@ from workout import (
     looks_like_workout_data, workout_score,
     process_workout_data,
 )
+from glossary import (
+    learn_from_lab_results, learn_from_workout,
+    learn_from_document, glossary_context_for_prompt,
+)
 from reminders import (
     get_reminders, get_all_reminders, add_reminder, delete_reminder,
     format_reminders_list, check_due_reminders, mark_sent,
@@ -421,6 +425,18 @@ def _process_lab_results(raw_text: str, safe_name: str, file_name: str,
     insert_upload_log(safe_name, file_size, page_count, count, lab_name, collected_at,
                       "ok", "", raw_text[:10000], owner_id=owner_id)
     log.info("Stored %d biomarkers from %s (lab=%s, date=%s, owner=%s)", count, safe_name, lab_name, collected_at, owner_id)
+
+    # Global glossary: learn biomarker names
+    try:
+        from db import get_client as _gc
+        _ch = _gc()
+        for r in valid_rows:
+            ref = ""
+            if r.get("ref_low") is not None or r.get("ref_high") is not None:
+                ref = f"{r.get('ref_low', '?')}–{r.get('ref_high', '?')}"
+            learn_from_lab_results(_ch, r["biomarker"], r.get("category", ""), r.get("unit", ""), ref)
+    except Exception as exc:
+        log.warning("Glossary learn from lab failed: %s", exc)
 
     abnormal = [r for r in valid_rows
                 if (r.get("ref_low") is not None and r["value"] < r["ref_low"])
@@ -893,6 +909,30 @@ def handle_command(text: str, owner_id: str = "524605979") -> str | None:
             lines.append("  Данные найдены, но без числовой прогрессии")
         return "\n".join(lines)
 
+    if cmd_name == "/glossary":
+        from glossary import glossary_stats, search_glossary
+        from db import get_client
+        ch = get_client()
+        if arg:
+            results = search_glossary(ch, arg)
+            if not results:
+                return f"'{arg}' не найдено в глоссарии."
+            lines = [f"<b>Глоссарий: {arg}</b>\n"]
+            for r in results:
+                status_icon = {"trusted": "", "verified": "", "candidate": ""}
+                icon = status_icon.get(r.get("status", ""), "")
+                lines.append(f"  {icon} <b>{r['term']}</b> [{r['domain']}] — {r.get('definition', '')}")
+            return "\n".join(lines)
+        stats = glossary_stats(ch)
+        lines = [f"<b>Глоссарий бота</b> ({stats['total']} терминов)\n"]
+        for domain, statuses in stats.get("domains", {}).items():
+            total = sum(statuses.values())
+            trusted = statuses.get("trusted", 0)
+            verified = statuses.get("verified", 0)
+            lines.append(f"  <b>{domain}</b>: {total} (trusted: {trusted}, verified: {verified})")
+        lines.append(f"\nПоиск: <code>/glossary слово</code>")
+        return "\n".join(lines)
+
     if cmd_name == "/summary":
         return None  # handled via LLM path
 
@@ -930,6 +970,15 @@ _PROTOCOL_KEYWORDS = [
 def _is_protocol_question(text: str) -> bool:
     text_lower = text.lower()
     return any(kw in text_lower for kw in _PROTOCOL_KEYWORDS)
+
+
+def _build_glossary_context() -> str:
+    """Include global glossary in LLM prompt if terms exist."""
+    try:
+        from db import get_client
+        return glossary_context_for_prompt(get_client(), max_terms=30)
+    except Exception:
+        return ""
 
 
 def _build_protocol_context(question: str) -> str:
@@ -986,6 +1035,7 @@ def ask_llm(question: str, owner_id: str = "524605979") -> str:
 {ch_context}
 {chat_block}
 {_build_protocol_context(question)}
+{_build_glossary_context()}
 === ВОПРОС ===
 {question}
 
@@ -1755,6 +1805,16 @@ def main() -> None:
 
     users = load_users()
     log.info("=== HEALTH-BOT STARTED (users: %s) ===", ", ".join(f"@{u}" for u in users))
+
+    # Seed global glossary from workout_glossary.yaml (idempotent)
+    try:
+        from glossary import seed_from_workout_glossary
+        from db import get_client
+        count = seed_from_workout_glossary(get_client())
+        if count:
+            log.info("Glossary seeded: %d terms", count)
+    except Exception as exc:
+        log.warning("Glossary seed failed: %s", exc)
 
     # Start reminder checker in background
     import threading

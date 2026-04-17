@@ -48,19 +48,27 @@ def get_all_reminders(ch, owner_id: str) -> list[dict]:
 
 def add_reminder(ch, owner_id: str, chat_id: str,
                  text: str, hour: int, minute: int,
-                 days: list[int] | None = None) -> str:
-    """Add a new reminder. Returns confirmation message."""
+                 days: list[int] | None = None,
+                 target_date=None) -> str:
+    """Add a new reminder. target_date for one-shot reminders."""
     rid = str(uuid.uuid4())
     ch.insert("reminders", [[
         rid, owner_id, chat_id, text,
         hour, minute, days or [], True,
-        datetime.now(), None,
+        datetime.now(), None, target_date,
     ]], column_names=[
         "id", "owner_id", "chat_id", "text",
         "hour", "minute", "days", "active",
-        "created_at", "last_sent_at",
+        "created_at", "last_sent_at", "target_date",
     ])
 
+    if target_date:
+        return (
+            f"Напоминание установлено:\n"
+            f"  {text}\n"
+            f"  Когда: <b>{target_date} в {hour:02d}:{minute:02d} МСК</b>\n"
+            f"  ID: <code>{rid[:8]}</code>"
+        )
     days_str = _format_days(days)
     return (
         f"Напоминание добавлено:\n"
@@ -107,20 +115,28 @@ def check_due_reminders(ch) -> list[dict]:
     current_hour = now.hour
     current_minute = now.minute
     current_dow = now.isoweekday()  # 1=Mon..7=Sun
+    today = now.date()
 
     result = ch.query(
-        f"SELECT id, owner_id, chat_id, text, hour, minute, days, last_sent_at "
+        f"SELECT id, owner_id, chat_id, text, hour, minute, days, last_sent_at, target_date "
         f"FROM reminders WHERE active = true "
         f"AND hour = {current_hour} AND minute = {current_minute}"
     )
 
     due = []
     for row in result.result_rows:
-        rid, owner_id, chat_id, text, hour, minute, days, last_sent = row
+        rid, owner_id, chat_id, text, hour, minute, days, last_sent, target_date = row
 
-        # Check day-of-week filter
-        if days and current_dow not in days:
-            continue
+        # One-shot reminder: check target_date matches today
+        if target_date:
+            from datetime import date as date_cls
+            td = target_date if isinstance(target_date, date_cls) else date_cls.fromisoformat(str(target_date))
+            if td != today:
+                continue
+        else:
+            # Recurring: check day-of-week filter
+            if days and current_dow not in days:
+                continue
 
         # Check not already sent this minute
         if last_sent:
@@ -133,17 +149,24 @@ def check_due_reminders(ch) -> list[dict]:
             "owner_id": owner_id,
             "chat_id": chat_id,
             "text": text,
+            "is_oneshot": target_date is not None,
         })
 
     return due
 
 
-def mark_sent(ch, rid: str) -> None:
-    """Update last_sent_at after sending."""
-    ch.command(
-        f"ALTER TABLE reminders UPDATE last_sent_at = now() "
-        f"WHERE id = '{rid}'"
-    )
+def mark_sent(ch, rid: str, deactivate: bool = False) -> None:
+    """Update last_sent_at after sending. Deactivate one-shot reminders."""
+    if deactivate:
+        ch.command(
+            f"ALTER TABLE reminders UPDATE last_sent_at = now(), active = false "
+            f"WHERE id = '{rid}'"
+        )
+    else:
+        ch.command(
+            f"ALTER TABLE reminders UPDATE last_sent_at = now() "
+            f"WHERE id = '{rid}'"
+        )
 
 
 def parse_reminder_command(text: str) -> dict | None:
@@ -200,6 +223,130 @@ def parse_reminder_command(text: str) -> dict | None:
         return None
 
     return {"action": "add", "hour": hour, "minute": minute, "days": days, "text": rest}
+
+
+# ─── Natural language reminder parser ───────────────────────────────────────
+
+_REMINDER_RE = re.compile(
+    r'(?:напомни|напомнить|напоминание|remind|поставь\s+напоминание|'
+    r'разбуди|будильник|не\s+забыть|не\s+забудь)',
+    re.IGNORECASE,
+)
+
+
+def looks_like_reminder(text: str) -> bool:
+    """Does the text look like a reminder request?"""
+    return bool(_REMINDER_RE.search(text))
+
+
+def parse_natural_reminder(text: str) -> dict | None:
+    """Parse natural language reminder request.
+
+    Examples:
+      'напомни завтра в 9:00 посмотреть анализы'
+      'напомни в 15:30 принять BPC'
+      'напомни послезавтра в 8 утра сдать кровь'
+      'напомни через 2 часа проверить почту'
+
+    Returns: {hour, minute, target_date (or None), text} or None.
+    """
+    text_lower = text.lower().strip()
+
+    # Must contain reminder trigger
+    if not _REMINDER_RE.search(text_lower):
+        return None
+
+    now = datetime.now(MSK_TZ)
+    target_date = None
+    hour = None
+    minute = 0
+
+    # ── Extract time ──
+    # "в 9:00", "в 9", "в 15:30"
+    m_time = re.search(r'в\s+(\d{1,2})[:\.](\d{2})', text_lower)
+    if m_time:
+        hour = int(m_time.group(1))
+        minute = int(m_time.group(2))
+    else:
+        m_time = re.search(r'в\s+(\d{1,2})\s*(?:утра|часов|час|ч\.?)', text_lower)
+        if m_time:
+            hour = int(m_time.group(1))
+        else:
+            m_time = re.search(r'в\s+(\d{1,2})\s', text_lower)
+            if m_time:
+                h = int(m_time.group(1))
+                if 0 <= h <= 23:
+                    hour = h
+
+    # "через N часов/минут"
+    m_delta = re.search(r'через\s+(\d+)\s*(?:час|ч)', text_lower)
+    if m_delta:
+        delta_h = int(m_delta.group(1))
+        target_time = now + timedelta(hours=delta_h)
+        hour = target_time.hour
+        minute = target_time.minute
+        target_date = target_time.date()
+
+    m_delta_m = re.search(r'через\s+(\d+)\s*(?:минут|мин)', text_lower)
+    if m_delta_m:
+        delta_m = int(m_delta_m.group(1))
+        target_time = now + timedelta(minutes=delta_m)
+        hour = target_time.hour
+        minute = target_time.minute
+        target_date = target_time.date()
+
+    if hour is None:
+        return None
+
+    if hour > 23 or minute > 59:
+        return None
+
+    # ── Extract date ──
+    if target_date is None:
+        if re.search(r'послезавтра', text_lower):
+            target_date = (now + timedelta(days=2)).date()
+        elif re.search(r'завтра', text_lower):
+            target_date = (now + timedelta(days=1)).date()
+        elif re.search(r'сегодня', text_lower):
+            target_date = now.date()
+        else:
+            # No date specified — today if time is in future, tomorrow otherwise
+            if hour > now.hour or (hour == now.hour and minute > now.minute):
+                target_date = now.date()
+            else:
+                target_date = (now + timedelta(days=1)).date()
+
+    # ── Extract reminder text ──
+    # Remove the trigger and time/date parts, keep the actual reminder content
+    reminder_text = text
+    # Remove trigger words
+    reminder_text = _REMINDER_RE.sub('', reminder_text).strip()
+    # Remove time patterns
+    reminder_text = re.sub(r'в\s+\d{1,2}[:.]\d{2}', '', reminder_text).strip()
+    reminder_text = re.sub(r'в\s+\d{1,2}\s*(?:утра|часов|час|ч\.?)?\b', '', reminder_text).strip()
+    reminder_text = re.sub(r'через\s+\d+\s*(?:часов?|ч|минут|мин)\w*', '', reminder_text).strip()
+    # Remove date words
+    reminder_text = re.sub(r'(?:послезавтра|завтра|сегодня)', '', reminder_text, flags=re.IGNORECASE).strip()
+    # Remove stray prepositions left after removal
+    reminder_text = re.sub(r'\bна\s+(?=\s|$)', '', reminder_text).strip()
+    reminder_text = re.sub(r'\bмне\b', '', reminder_text).strip()
+    # Clean up punctuation and whitespace
+    reminder_text = re.sub(r'^[\s,.\-!:;]+', '', reminder_text).strip()
+    reminder_text = re.sub(r'[\s,.\-!:;]+$', '', reminder_text).strip()
+    reminder_text = re.sub(r'\s{2,}', ' ', reminder_text).strip()
+
+    if not reminder_text:
+        reminder_text = "Напоминание"
+
+    # Capitalize first letter
+    reminder_text = reminder_text[0].upper() + reminder_text[1:] if reminder_text else reminder_text
+
+    return {
+        "hour": hour,
+        "minute": minute,
+        "target_date": target_date,
+        "text": reminder_text,
+    }
 
 
 def _format_days(days: list[int] | None) -> str:

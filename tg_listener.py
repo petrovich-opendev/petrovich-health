@@ -55,7 +55,7 @@ from workout import (
 from reminders import (
     get_reminders, get_all_reminders, add_reminder, delete_reminder,
     format_reminders_list, check_due_reminders, mark_sent,
-    parse_reminder_command,
+    parse_reminder_command, looks_like_reminder, parse_natural_reminder,
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1663,6 +1663,24 @@ def process_message(message: dict) -> None:
         send_message(chat_id, cmd_response)
         return
 
+    # ── Natural language reminders (before LLM Q&A) ──
+    if looks_like_reminder(text):
+        parsed_rem = parse_natural_reminder(text)
+        if parsed_rem:
+            log.info("Natural reminder: %s", parsed_rem)
+            from db import get_client
+            ch = get_client()
+            result = add_reminder(
+                ch, owner_id, chat_id,
+                parsed_rem["text"],
+                parsed_rem["hour"],
+                parsed_rem["minute"],
+                target_date=parsed_rem.get("target_date"),
+            )
+            send_message(chat_id, result)
+            insert_chat_message("bot", result, owner_id=owner_id)
+            return
+
     # Classify long text input: medical data, workout log, or question
     input_type = classify_input_type(text)
 
@@ -1720,8 +1738,9 @@ def _reminder_loop() -> None:
                 msg = f"💊 <b>Напоминание</b> ({now_msk})\n\n{r['text']}"
                 try:
                     send_message(r["chat_id"], msg)
-                    mark_sent(ch, r["id"])
-                    log.info("Reminder sent to %s: %s", r["owner_id"], r["text"][:50])
+                    mark_sent(ch, r["id"], deactivate=r.get("is_oneshot", False))
+                    log.info("Reminder sent to %s: %s (oneshot=%s)",
+                             r["owner_id"], r["text"][:50], r.get("is_oneshot"))
                 except Exception as exc:
                     log.error("Failed to send reminder %s: %s", r["id"][:8], exc)
         except Exception as exc:

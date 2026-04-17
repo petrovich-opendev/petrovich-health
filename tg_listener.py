@@ -140,6 +140,47 @@ def _save_chat_id(username: str, chat_id: str) -> None:
     except Exception as exc:
         logging.getLogger("health-bot").warning("Failed to save chat_id: %s", exc)
 
+
+def _get_admin_chat_ids() -> list[str]:
+    """Get chat_ids of all admin users."""
+    users = load_users()
+    return [u["chat_id"] for u in users.values()
+            if u.get("role") == "admin" and u.get("chat_id")]
+
+
+def _add_user_to_yaml(name: str, chat_id: str, username: str = "") -> bool:
+    """Add a new user to users.yaml. Returns True on success."""
+    try:
+        data = _yaml.safe_load(USERS_YAML_PATH.read_text(encoding="utf-8"))
+        users_list = data.get("users", [])
+
+        # Check not already there
+        for u in users_list:
+            if str(u.get("chat_id", "")) == chat_id:
+                return False
+            if username and u.get("username", "").lower() == username.lower():
+                return False
+
+        new_user = {"name": name, "role": "user", "chat_id": int(chat_id)}
+        if username:
+            new_user["username"] = username
+        users_list.append(new_user)
+
+        data["users"] = users_list
+        USERS_YAML_PATH.write_text(
+            _yaml.safe_dump(data, allow_unicode=True, sort_keys=False),
+            encoding="utf-8",
+        )
+        log.info("Added user: %s (chat_id=%s, @%s)", name, chat_id, username or "no_username")
+        return True
+    except Exception as exc:
+        log.error("Failed to add user: %s", exc)
+        return False
+
+
+# Pending access requests: {chat_id: {name, username, first_name, last_name, requested_at}}
+_access_requests: dict[str, dict] = {}
+
 DATA_DIR.mkdir(exist_ok=True)
 LOGS_DIR.mkdir(exist_ok=True)
 
@@ -1523,7 +1564,43 @@ def process_message(message: dict) -> None:
     # Security: only authorized users from users.yaml
     user = resolve_user(message)
     if not user:
-        log.info("Ignored message from @%s (chat_id=%s) — not in users.yaml", username, chat_id)
+        from_user = message.get("from", {})
+        first_name = from_user.get("first_name", "")
+        last_name = from_user.get("last_name", "")
+        full_name = f"{first_name} {last_name}".strip() or "Unknown"
+        uname = from_user.get("username", "")
+
+        # Don't spam — one request per user, throttle 10 min
+        prev = _access_requests.get(chat_id)
+        if prev and time.time() - prev.get("ts", 0) < 600:
+            # Already requested recently — silently ignore
+            return
+
+        _access_requests[chat_id] = {
+            "name": full_name, "username": uname,
+            "ts": time.time(),
+        }
+        log.info("Access request from %s (@%s, chat_id=%s)", full_name, uname, chat_id)
+
+        # Notify user
+        send_message(chat_id,
+            "Привет! Для доступа нужно одобрение администратора.\n"
+            "Запрос отправлен. Жди ответа.")
+
+        # Notify all admins
+        uname_str = f" (@{uname})" if uname else ""
+        admin_msg = (
+            f"<b>Запрос доступа</b>\n\n"
+            f"Имя: <b>{full_name}</b>{uname_str}\n"
+            f"Chat ID: <code>{chat_id}</code>\n\n"
+            f"Одобрить: <code>/approve {chat_id}</code>\n"
+            f"Отклонить — просто проигнорируй."
+        )
+        for admin_cid in _get_admin_chat_ids():
+            try:
+                send_message(admin_cid, admin_msg)
+            except Exception as exc:
+                log.warning("Failed to notify admin %s: %s", admin_cid, exc)
         return
 
     owner_id = user["owner_id"]
@@ -1668,6 +1745,39 @@ def process_message(message: dict) -> None:
             handled = _handle_pending(chat_id, owner_id, text, user)
             if handled:
                 return
+
+    # ── Admin: approve new users ──
+    if text.strip().lower().startswith("/approve") and user.get("role") == "admin":
+        parts_approve = text.strip().split(maxsplit=1)
+        if len(parts_approve) < 2:
+            send_message(chat_id, "Формат: <code>/approve chat_id</code>")
+            return
+        target_cid = parts_approve[1].strip()
+        req = _access_requests.get(target_cid)
+        if not req:
+            # Maybe direct approve without prior request
+            req = {"name": f"User_{target_cid}", "username": ""}
+
+        name = req.get("name", f"User_{target_cid}")
+        uname = req.get("username", "")
+
+        if _add_user_to_yaml(name, target_cid, uname):
+            send_message(chat_id, f"Пользователь <b>{name}</b> ({target_cid}) добавлен.")
+            # Notify the new user
+            try:
+                send_message(target_cid,
+                    "Доступ открыт! Теперь можешь:\n\n"
+                    "📎 Отправить PDF с анализами\n"
+                    "📸 Фото анализов\n"
+                    "📝 Текст анализов или тренировки\n"
+                    "💬 Задать вопрос о здоровье\n\n"
+                    "Все данные изолированы — видишь только своё.")
+            except Exception:
+                pass
+            _access_requests.pop(target_cid, None)
+        else:
+            send_message(chat_id, f"Пользователь {target_cid} уже есть или ошибка добавления.")
+        return
 
     # Feedback → GitHub Issue (dialog mode)
     if text.strip().lower().startswith("/feedback"):

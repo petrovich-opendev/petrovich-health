@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import re
 import uuid
 from datetime import date, datetime
 from typing import Any
@@ -13,6 +14,10 @@ load_dotenv()
 
 _client = None
 
+# Telegram chat_id is always a positive integer (up to ~10^19).
+# This is the ONLY allowed shape for owner_id — nothing else can reach SQL.
+_OWNER_ID_RE = re.compile(r"^-?\d{1,20}$")
+
 
 def get_client() -> clickhouse_connect.driver.Client:
     global _client
@@ -23,14 +28,34 @@ def get_client() -> clickhouse_connect.driver.Client:
             database=os.getenv("CH_DATABASE", "health_analytics"),
             username=os.getenv("CH_USER", "default"),
             password=os.getenv("CH_PASSWORD", ""),
+            # Synchronous insert visibility: user saves data then immediately
+            # asks LLM — the read must see the write. async_insert would hide
+            # the row for ~1 sec, breaking the post-save analysis path.
+            settings={"async_insert": 0, "wait_for_async_insert": 1},
         )
     return _client
 
 
+def _validate_owner_id(owner_id: Any) -> str:
+    """Accept only digit-only strings (Telegram chat_id shape).
+
+    Blocks SQL injection at the boundary into every _own() call-site.
+    Raise — never silently sanitize — so the failure surfaces in logs.
+    """
+    s = str(owner_id)
+    if not _OWNER_ID_RE.match(s):
+        raise ValueError(f"Invalid owner_id shape: {owner_id!r}")
+    return s
+
+
 # ─── owner_id filter helper ─────────────────────────────────────────────────
 def _own(owner_id: str) -> str:
-    """WHERE clause fragment for owner isolation."""
-    return f"owner_id = '{owner_id}'"
+    """WHERE clause fragment for owner isolation.
+
+    owner_id is validated to digit-only before interpolation — safe from SQL
+    injection even under f-string concatenation.
+    """
+    return f"owner_id = '{_validate_owner_id(owner_id)}'"
 
 
 # ─── Inserts ─────────────────────────────────────────────────────────────────
@@ -285,20 +310,71 @@ def query_recent_digests(days: int = 7, owner_id: str = "524605979") -> str:
     return "\n".join(lines)
 
 
+def query_fresh_uploads(hours: int = 48, owner_id: str = "524605979",
+                        max_biomarkers: int = 200, max_docs: int = 20) -> str:
+    """Return biomarkers + documents uploaded within the last `hours`.
+    This section is placed FIRST in the LLM context so just-saved data is never
+    masked by an older health_profile snapshot. Hard caps on rows prevent
+    prompt-bloat if user dumps many files at once.
+    """
+    client = get_client()
+    fresh = client.query(
+        f"SELECT collected_at, category, biomarker, value, unit, ref_low, ref_high, "
+        f"  is_abnormal, lab_name, source_file, uploaded_at "
+        f"FROM lab_results FINAL WHERE {_own(owner_id)} "
+        f"  AND uploaded_at >= now() - INTERVAL {{h:UInt32}} HOUR "
+        f"ORDER BY uploaded_at DESC, biomarker "
+        f"LIMIT {{lim:UInt32}}",
+        parameters={"h": hours, "lim": max_biomarkers},
+    )
+    fresh_bio_lines = []
+    for row in fresh.result_rows:
+        flag = " [ВНЕ НОРМЫ]" if row[7] else ""
+        ref = ""
+        if row[5] is not None or row[6] is not None:
+            ref = f" (норма: {row[5] or '?'}–{row[6] or '?'})"
+        lab = f" | {row[8]}" if row[8] else ""
+        fresh_bio_lines.append(
+            f"  загружено {row[10]:%Y-%m-%d %H:%M} | замер {row[0]} | "
+            f"{row[2]}: {row[3]} {row[4]}{ref}{flag}{lab}"
+        )
+    fresh_docs = client.query(
+        f"SELECT uploaded_at, collected_at, doc_type, title "
+        f"FROM documents WHERE {_own(owner_id)} "
+        f"  AND uploaded_at >= now() - INTERVAL {{h:UInt32}} HOUR "
+        f"ORDER BY uploaded_at DESC LIMIT {{lim:UInt32}}",
+        parameters={"h": hours, "lim": max_docs},
+    )
+    fresh_doc_lines = []
+    for row in fresh_docs.result_rows:
+        fresh_doc_lines.append(
+            f"  загружен {row[0]:%Y-%m-%d %H:%M} | дата {row[1]} | {row[2]} | {row[3]}"
+        )
+    if not fresh_bio_lines and not fresh_doc_lines:
+        return ""
+    parts = []
+    if fresh_bio_lines:
+        parts.append("Биомаркеры:\n" + "\n".join(fresh_bio_lines))
+    if fresh_doc_lines:
+        parts.append("Документы:\n" + "\n".join(fresh_doc_lines))
+    return "\n\n".join(parts)
+
+
 def query_for_llm_context(question: str, owner_id: str = "524605979") -> str:
     stats = query_summary_stats(owner_id)
     profile = query_health_profile(owner_id)
     digests = query_recent_digests(7, owner_id)
+    fresh = query_fresh_uploads(48, owner_id)
 
     if stats["total_records"] == 0 and not profile:
         return "(Нет данных в базе. Загрузите анализы через PDF.)"
 
     client = get_client()
 
-    # ── All results (no hard limit — user has real history) ──
+    # ── All results (LIMIT 500 to bound prompt size) ──
     latest = client.query(
         f"SELECT collected_at, category, biomarker, value, unit, ref_low, ref_high, is_abnormal "
-        f"FROM lab_results WHERE {_own(owner_id)} "
+        f"FROM lab_results FINAL WHERE {_own(owner_id)} "
         f"ORDER BY collected_at DESC, biomarker LIMIT 500"
     )
     latest_lines = []
@@ -309,33 +385,34 @@ def query_for_llm_context(question: str, owner_id: str = "524605979") -> str:
             ref = f" (норма: {row[5] or '?'}–{row[6] or '?'})"
         latest_lines.append(f"  {row[0]} | {row[1]} | {row[2]}: {row[3]} {row[4]}{ref}{flag}")
 
-    # ── Dynamics: biomarkers with ≥2 measurements, show trend ──
+    # ── Dynamics: biomarkers with ≥2 measurements, last 20 points per (biomarker, unit).
+    # Grouping by (biomarker, unit) is critical: mixing mg/dl and mmol/l glucose
+    # in one series would produce a nonsensical 1700%-jump trend line.
     dynamics = client.query(
-        f"SELECT biomarker, "
-        f"  groupArray(collected_at) as dates, "
-        f"  groupArray(value) as vals, "
-        f"  groupArray(unit) as units, "
+        f"SELECT biomarker, unit, "
+        f"  arraySlice(arrayReverseSort(x -> x.1, groupArray((collected_at, value))), 1, 20) as pts, "
         f"  any(ref_low) as ref_low, "
         f"  any(ref_high) as ref_high, "
         f"  count() as cnt "
-        f"FROM lab_results WHERE {_own(owner_id)} "
-        f"GROUP BY biomarker HAVING cnt >= 2 "
-        f"ORDER BY biomarker"
+        f"FROM lab_results FINAL WHERE {_own(owner_id)} "
+        f"GROUP BY biomarker, unit HAVING cnt >= 2 "
+        f"ORDER BY biomarker, unit"
     )
     dynamics_lines = []
     for row in dynamics.result_rows:
-        bm, dates, vals, units, ref_low, ref_high, cnt = row
-        unit = units[0] if units else ""
+        bm, unit, pts, ref_low, ref_high, cnt = row
+        # pts is array of (date, value) tuples — sorted DESC by date, top 20.
+        # Python sort ASC for readable left-to-right trend.
+        points = sorted(pts, key=lambda t: t[0])
+        dates = [p[0] for p in points]
+        vals = [p[1] for p in points]
         ref = ""
         if ref_low is not None or ref_high is not None:
             ref = f" (норма: {ref_low or '?'}–{ref_high or '?'})"
 
-        # Build trend line: date1=val1 → date2=val2 → ...
-        points = sorted(zip(dates, vals))
-        trend_parts = [f"{d}={v}" for d, v in points]
+        trend_parts = [f"{d}={v}" for d, v in zip(dates, vals)]
 
-        # Direction
-        first_val, last_val = points[0][1], points[-1][1]
+        first_val, last_val = vals[0], vals[-1]
         diff = last_val - first_val
         pct = (diff / first_val * 100) if first_val != 0 else 0
         arrow = "↑" if diff > 0 else "↓" if diff < 0 else "→"
@@ -347,7 +424,7 @@ def query_for_llm_context(question: str, owner_id: str = "524605979") -> str:
 
     abnormal = client.query(
         f"SELECT collected_at, biomarker, value, unit, ref_low, ref_high "
-        f"FROM lab_results WHERE {_own(owner_id)} AND is_abnormal = true "
+        f"FROM lab_results FINAL WHERE {_own(owner_id)} AND is_abnormal = true "
         f"ORDER BY collected_at DESC LIMIT 50"
     )
     abnormal_lines = []
@@ -365,8 +442,14 @@ def query_for_llm_context(question: str, owner_id: str = "524605979") -> str:
         doc_lines.append(f"--- {row[2]} ({row[1]}, {row[0]}) ---\n{row[3]}")
 
     sections = []
+    if fresh:
+        sections.append(
+            "=== СВЕЖИЕ ЗАГРУЗКИ (последние 48 часов) ===\n"
+            "Эти данные загружены пользователем недавно. "
+            "Если HEALTH PROFILE ниже противоречит им — профиль устарел, доверяй этим цифрам.\n\n"
+            f"{fresh}")
     if profile:
-        sections.append(f"=== HEALTH PROFILE ===\n{profile}")
+        sections.append(f"=== HEALTH PROFILE (snapshot) ===\n{profile}")
     if digests:
         sections.append(f"=== ДАЙДЖЕСТЫ (7 дней) ===\n{digests}")
 
@@ -411,7 +494,7 @@ def insert_training_entry(
         body_weight_kg, raw_text, parsed_json,
         unknown_terms or [], source,
     ]], column_names=[
-        "id", "owner_id", "created_at", "workout_date", "entry_type",
+        "id", "owner_id", "uploaded_at", "workout_date", "entry_type",
         "training_day", "muscle_groups", "cycle_number", "cycle_weeks",
         "body_weight_kg", "raw_text", "parsed_json",
         "unknown_terms", "source",
@@ -426,7 +509,7 @@ def query_recent_workouts(limit: int = 10, owner_id: str = "524605979") -> list[
         f"SELECT workout_date, training_day, muscle_groups, cycle_number, "
         f"body_weight_kg, parsed_json "
         f"FROM training_entries WHERE {_own(owner_id)} "
-        f"ORDER BY workout_date DESC, created_at DESC LIMIT {{lim:UInt32}}",
+        f"ORDER BY workout_date DESC, uploaded_at DESC LIMIT {{lim:UInt32}}",
         parameters={"lim": limit},
     )
     return [dict(zip(result.column_names, row)) for row in result.result_rows]

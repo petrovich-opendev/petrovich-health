@@ -281,9 +281,8 @@ def parse_workout_text(text: str) -> dict | None:
     glossary_text = glossary_as_text()
     prompt = _PARSE_PROMPT_TEMPLATE.format(glossary=glossary_text, text=text)
 
-    # Haiku first — fast enough for workout parsing, Sonnet as fallback
-    for model in ["claude-haiku-4-5-20251001", "claude-sonnet-4-6"]:
-        timeout = 120 if "haiku" in model else 180
+    for model in ["claude-opus-4-7", "claude-opus-4-7"]:
+        timeout = 180
         try:
             log.info("Parsing workout with model=%s (%d chars)", model, len(text))
             result = subprocess.run(

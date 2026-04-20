@@ -144,7 +144,7 @@ def run_digest(log: logging.Logger, owner_id: str = "524605979") -> int:
 {chat_text}"""
 
     try:
-        raw = call_claude(prompt, "claude-haiku-4-5-20251001", timeout=90)
+        raw = call_claude(prompt, "claude-opus-4-7", timeout=240)
         m = re.search(r"\{.*\}", raw, re.DOTALL)
         if not m:
             raise ValueError(f"No JSON: {raw[:200]}")
@@ -159,7 +159,7 @@ def run_digest(log: logging.Logger, owner_id: str = "524605979") -> int:
         data.get("topics", []),
         data.get("user_concerns", ""),
         data.get("new_info", ""),
-        "claude-haiku-4-5-20251001",
+        "claude-opus-4-7",
         owner_id,
     ]], column_names=["date", "digest", "topics", "user_concerns", "new_info", "model", "owner_id"])
 
@@ -307,7 +307,7 @@ def run_profile(log: logging.Logger, owner_id: str = "524605979") -> int:
 }}"""
 
     try:
-        raw = call_claude(prompt, "claude-opus-4-6", timeout=240)
+        raw = call_claude(prompt, "claude-opus-4-7", timeout=240)
         m = re.search(r"\{.*\}", raw, re.DOTALL)
         if not m:
             raise ValueError(f"No JSON: {raw[:300]}")
@@ -331,7 +331,7 @@ def run_profile(log: logging.Logger, owner_id: str = "524605979") -> int:
         json.dumps(data.get("missing_data", []), ensure_ascii=False),
         json.dumps(data.get("alerts", []), ensure_ascii=False),
         data_hash,
-        "claude-opus-4-6",
+        "claude-opus-4-7",
         owner_id,
     ]], column_names=[
         "date", "profile_text", "overall_status", "key_findings",

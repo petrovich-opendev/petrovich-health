@@ -69,12 +69,11 @@ EXTRACTION_PROMPT = """Ты — медицинский парсер лабора
 
 def classify_document(
     raw_text: str,
-    model: str = "claude-haiku-4-5-20251001",
+    model: str = "claude-opus-4-7",
     timeout: int = 60,
 ) -> dict:
     """
     Classify a medical document before extraction.
-    Uses Haiku — cheap and fast, classification is simple.
     """
     prompt = CLASSIFICATION_PROMPT + raw_text[:8000]
     try:
@@ -99,15 +98,12 @@ def classify_document(
 
 def extract_biomarkers(
     raw_text: str,
-    primary_model: str = "claude-sonnet-4-6",
-    fallback_model: str = "claude-haiku-4-5-20251001",
+    primary_model: str = "claude-opus-4-7",
+    fallback_model: str = "claude-opus-4-7",
     timeout: int = 120,
 ) -> dict:
     """
     Send raw PDF text to LLM for structured extraction.
-
-    Uses Sonnet as primary (good quality, fast) and Haiku as fallback.
-    Opus is overkill for structured extraction — save tokens for Q&A.
 
     Returns dict with keys: collected_at, lab_name, results (list of biomarkers).
     """

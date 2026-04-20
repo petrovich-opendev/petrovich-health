@@ -138,10 +138,15 @@ def check_due_reminders(ch) -> list[dict]:
             if days and current_dow not in days:
                 continue
 
-        # Check not already sent this minute
+        # Check not already sent this minute.
+        # ClickHouse stores DateTime in server TZ (normally UTC) as naive.
+        # Treat it as UTC and compare to now() in UTC — never "rebrand" naive UTC
+        # as MSK (that's the bug that caused double-fire within the same minute).
         if last_sent:
             last_dt = last_sent if isinstance(last_sent, datetime) else datetime.fromisoformat(str(last_sent))
-            if last_dt.replace(tzinfo=MSK_TZ) >= now.replace(second=0, microsecond=0):
+            last_utc = last_dt if last_dt.tzinfo else last_dt.replace(tzinfo=timezone.utc)
+            now_utc_minute = now.astimezone(timezone.utc).replace(second=0, microsecond=0)
+            if last_utc >= now_utc_minute:
                 continue
 
         due.append({

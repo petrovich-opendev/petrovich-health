@@ -80,8 +80,11 @@ def add_term(
         if context_example and context_example not in new_contexts:
             new_contexts = (new_contexts + [context_example])[-5:]  # keep last 5
 
+        # created_at must be a valid datetime — CH column is non-nullable DateTime.
+        # On update we don't fetch the original; use now() (ReplacingMergeTree
+        # FINAL collapses on (id, updated_at) so created_at value is benign).
         ch.insert("glossary_terms", [[
-            eid, None, datetime.now(), term, normalized, domain, category,
+            eid, datetime.now(), datetime.now(), term, normalized, domain, category,
             definition or "", definition_en or "",
             aliases or [], [], related_terms or [],
             source, status, new_confidence,

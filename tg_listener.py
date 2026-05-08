@@ -793,6 +793,7 @@ def handle_command(text: str, owner_id: str = "524605979") -> str | None:
             "/abnormal — показатели вне нормы\n"
             "/biomarkers — список всех показателей в базе\n"
             "/spc — SPC-анализ (контрольные карты биомаркеров)\n"
+            "/alerts — проактивные алерты (давность анализов, тренды)\n"
             "/correlations — корреляции по системам органов\n"
             "/remind — напоминания о приёме препаратов\n"
             "/report — PDF-отчёт для врача\n"
@@ -981,6 +982,13 @@ def handle_command(text: str, owner_id: str = "524605979") -> str | None:
                 results.append(r)
         results.sort(key=lambda x: len(x.alerts), reverse=True)
         return format_spc_report(results)
+
+    if cmd_name == "/alerts":
+        from db import get_client
+        from alerts import check_lab_fatigue, format_alerts
+        ch = get_client()
+        items = check_lab_fatigue(ch, owner_id)
+        return format_alerts(items)
 
     if cmd_name == "/docs":
         docs = query_all_documents(owner_id=owner_id)

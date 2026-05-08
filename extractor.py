@@ -148,6 +148,18 @@ def extract_biomarkers(
             if parsed and "results" in parsed:
                 log.info("Extracted %d biomarkers with %s", len(parsed["results"]), model)
                 cache_put(text_hash, parsed)
+                # Observational self-check: log mismatches but do not block return.
+                try:
+                    from self_check import verify_extraction
+                    v = verify_extraction(raw_text, parsed)
+                    log.info("verify_extraction: verified=%s discrepancies=%d",
+                             v.get("verified"), len(v.get("discrepancies", [])))
+                    for i, d in enumerate(v.get("discrepancies", []) or []):
+                        log.warning("verify_extraction discrepancy[%d] row=%s field=%s extracted=%r source=%r",
+                                    i, d.get("row_index"), d.get("field"),
+                                    d.get("extracted"), d.get("found_in_source"))
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("verify_extraction skipped: %s", exc)
                 return parsed
 
         except subprocess.TimeoutExpired:

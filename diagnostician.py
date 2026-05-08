@@ -178,6 +178,18 @@ def run_digest(log: logging.Logger, owner_id: str = "524605979") -> int:
         log.error("Digest LLM failed: %s", exc)
         return 2
 
+    # Observational self-check: log mismatches but do not block return.
+    try:
+        from self_check import verify_digest
+        v = verify_digest(chat_text, data)
+        log.info("verify_digest: verified=%s discrepancies=%d",
+                 v.get("verified"), len(v.get("discrepancies", [])))
+        for i, d in enumerate(v.get("discrepancies", []) or []):
+            log.warning("verify_digest discrepancy[%d] field=%s extracted=%r source=%r",
+                        i, d.get("field"), d.get("extracted"), d.get("found_in_source"))
+    except Exception as exc:
+        log.warning("verify_digest skipped: %s", exc)
+
     ch.insert("daily_digest", [[
         date.fromisoformat(today),
         data.get("digest", ""),
@@ -357,6 +369,25 @@ def run_profile(log: logging.Logger, owner_id: str = "524605979") -> int:
         log.error("Profile LLM failed: %s", exc)
         send_telegram(f"⚠️ <b>Diagnostician failed</b>\n\n{str(exc)[:500]}", owner_id)
         return 2
+
+    # Observational self-check: log mismatches but do not block return.
+    try:
+        from self_check import verify_profile
+        # Assemble the same LAB+DIGEST+SPC source the profile LLM saw.
+        profile_source = (
+            "=== LAB ===\n" + ("\n".join(lab_lines) or "(нет данных)")
+            + "\n\n=== DIGESTS ===\n" + ("\n".join(digest_lines) or "(нет диалогов)")
+            + "\n\n=== SPC ===\n" + (spc_block or "(нет данных)")
+        )
+        v = verify_profile(profile_source, data)
+        log.info("verify_profile: verified=%s discrepancies=%d",
+                 v.get("verified"), len(v.get("discrepancies", [])))
+        for i, d in enumerate(v.get("discrepancies", []) or []):
+            log.warning("verify_profile discrepancy[%d] field=%s idx=%s extracted=%r source=%r",
+                        i, d.get("field"), d.get("index"),
+                        d.get("extracted"), d.get("found_in_source"))
+    except Exception as exc:
+        log.warning("verify_profile skipped: %s", exc)
 
     # Delete old profile for today + owner before inserting new
     ch.command(f"ALTER TABLE health_profile DELETE WHERE date = '{today}' AND owner_id = '{owner_id}'")

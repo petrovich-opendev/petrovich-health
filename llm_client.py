@@ -57,6 +57,13 @@ def chat_completion(
         "messages": [{"role": "user", "content": prompt}],
         "max_tokens": max_tokens,
     }
+    data_collection = os.getenv("OR_DATA_COLLECTION", "deny").strip().lower()
+    if data_collection != "allow":
+        body["provider"] = {"data_collection": "deny", "allow_fallbacks": True}
+        log.warning(
+            "OpenRouter privacy gate active (data_collection=deny); "
+            "request may fail if no compliant provider is available"
+        )
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",

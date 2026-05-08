@@ -17,7 +17,6 @@ import hashlib
 import json
 import logging
 import os
-import re
 import subprocess
 import sys
 from datetime import datetime, timezone, timedelta, date
@@ -27,6 +26,8 @@ import clickhouse_connect
 import requests
 import yaml
 from dotenv import load_dotenv
+
+from utils import parse_json_response
 
 PROJECT_DIR = Path(__file__).resolve().parent
 LOGS_DIR = PROJECT_DIR / "logs"
@@ -170,10 +171,9 @@ def run_digest(log: logging.Logger, owner_id: str = "524605979") -> int:
 
     try:
         raw = call_claude(prompt, "claude-opus-4-7", timeout=240)
-        m = re.search(r"\{.*\}", raw, re.DOTALL)
-        if not m:
+        data = parse_json_response(raw)
+        if data is None:
             raise ValueError(f"No JSON: {raw[:200]}")
-        data = json.loads(m.group(0))
     except Exception as exc:
         log.error("Digest LLM failed: %s", exc)
         return 2
@@ -350,10 +350,9 @@ def run_profile(log: logging.Logger, owner_id: str = "524605979") -> int:
 
     try:
         raw = call_claude(prompt, "claude-opus-4-7", timeout=300)
-        m = re.search(r"\{.*\}", raw, re.DOTALL)
-        if not m:
+        data = parse_json_response(raw)
+        if data is None:
             raise ValueError(f"No JSON: {raw[:300]}")
-        data = json.loads(m.group(0))
     except Exception as exc:
         log.error("Profile LLM failed: %s", exc)
         send_telegram(f"⚠️ <b>Diagnostician failed</b>\n\n{str(exc)[:500]}", owner_id)

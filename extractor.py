@@ -1,11 +1,11 @@
 """LLM-based biomarker extraction from raw PDF text."""
 from __future__ import annotations
 
-import json
 import logging
-import re
 import subprocess
 from datetime import date
+
+from utils import parse_json_response
 
 log = logging.getLogger("health-bot")
 
@@ -96,7 +96,7 @@ def classify_document(
             timeout=timeout,
         )
         if result.returncode == 0:
-            parsed = _parse_json(result.stdout.strip())
+            parsed = parse_json_response(result.stdout.strip())
             if parsed and "doc_class" in parsed:
                 log.info("Classified: doc_class=%s doc_type=%s", parsed["doc_class"], parsed.get("doc_type"))
                 return parsed
@@ -134,7 +134,7 @@ def extract_biomarkers(
                             result.returncode, model, result.stderr.strip()[:200])
                 continue
 
-            parsed = _parse_json(result.stdout.strip())
+            parsed = parse_json_response(result.stdout.strip())
             if parsed and "results" in parsed:
                 log.info("Extracted %d biomarkers with %s", len(parsed["results"]), model)
                 return parsed
@@ -145,21 +145,6 @@ def extract_biomarkers(
             log.warning("Extraction error model=%s: %s", model, exc)
 
     raise RuntimeError("Failed to extract biomarkers from PDF text")
-
-
-def _parse_json(raw: str) -> dict | None:
-    """Extract JSON from LLM response, handling markdown wrappers."""
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        pass
-    m = re.search(r"\{.*\}", raw, re.DOTALL)
-    if m:
-        try:
-            return json.loads(m.group(0))
-        except json.JSONDecodeError:
-            pass
-    return None
 
 
 def validate_results(data: dict, fallback_date: date | None = None) -> tuple[list[dict], list[str]]:

@@ -773,6 +773,60 @@ def process_text_lab_data(text: str, chat_id: str, owner_id: str = "524605979") 
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# /protocol formatting
+# ─────────────────────────────────────────────────────────────────────────────
+def _format_protocol(data: dict) -> str:
+    """Render get_current_protocol() result as a Telegram HTML message."""
+    stack = data.get("current_stack") or []
+    due = data.get("due_dates") or []
+
+    if not stack and not due:
+        return ("💊 <b>Текущий протокол</b>\n\n"
+                "Пока недостаточно данных. Расскажи в чате что принимаешь "
+                "(препарат, доза, единица) — соберу стек после очередного дайджеста.")
+
+    lines = ["💊 <b>Текущий протокол</b>"]
+    if stack:
+        lines.append("")
+        for item in stack:
+            sub = item.get("substance", "?")
+            dose = item.get("dose", "")
+            started = item.get("started_at")
+            started_ru = ""
+            if started:
+                try:
+                    started_ru = date.fromisoformat(started).strftime("%d.%m.%Y")
+                except (TypeError, ValueError):
+                    started_ru = str(started)
+            head = f"  • <b>{sub}</b>"
+            if dose:
+                head += f" {dose}"
+            if started_ru:
+                head += f" — с {started_ru}"
+            lines.append(head)
+    else:
+        lines.append("\n<i>Активный стек не распознан в дайджестах.</i>")
+
+    if due:
+        lines.append("\n<b>Рекомендованные анализы:</b>")
+        for d in due:
+            test = d.get("test", "?")
+            due_at = d.get("due_at", "")
+            try:
+                due_ru = date.fromisoformat(due_at).strftime("%d.%m.%Y")
+            except (TypeError, ValueError):
+                due_ru = due_at or "?"
+            rationale = d.get("rationale", "")
+            icon = "⚠️ " if d.get("overdue") else ""
+            line = f"  • {icon}<b>{test}</b> — до {due_ru}"
+            if rationale:
+                line += f" ({rationale})"
+            lines.append(line)
+
+    return "\n".join(lines)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Commands
 # ─────────────────────────────────────────────────────────────────────────────
 def handle_command(text: str, owner_id: str = "524605979") -> str | None:
@@ -794,6 +848,7 @@ def handle_command(text: str, owner_id: str = "524605979") -> str | None:
             "/biomarkers — список всех показателей в базе\n"
             "/spc — SPC-анализ (контрольные карты биомаркеров)\n"
             "/alerts — проактивные алерты (давность анализов, тренды)\n"
+            "/protocol — текущий стек и сроки follow-up анализов\n"
             "/correlations — корреляции по системам органов\n"
             "/remind — напоминания о приёме препаратов\n"
             "/report — PDF-отчёт для врача\n"
@@ -989,6 +1044,17 @@ def handle_command(text: str, owner_id: str = "524605979") -> str | None:
         ch = get_client()
         items = check_lab_fatigue(ch, owner_id) + check_trend_reversals(ch, owner_id)
         return format_alerts(items)
+
+    if cmd_name == "/protocol":
+        from db import get_client
+        from protocol import get_current_protocol
+        ch = get_client()
+        try:
+            data = get_current_protocol(ch, owner_id)
+        except Exception as exc:
+            log.error("/protocol failed: %s", exc)
+            return f"⚠️ Не удалось собрать протокол: {exc}"
+        return _format_protocol(data)
 
     if cmd_name == "/docs":
         docs = query_all_documents(owner_id=owner_id)

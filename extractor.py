@@ -4,19 +4,29 @@ from __future__ import annotations
 import json
 import logging
 import re
-import subprocess
 from datetime import date
+
+from llm_client import LLMError, chat_completion
 
 log = logging.getLogger("health-bot")
 
-CLASSIFICATION_PROMPT = """Классифицируй медицинский документ. Верни СТРОГО JSON (без markdown):
+CLASSIFICATION_PROMPT = """Ты классифицируешь медицинский документ.
+
+ЖЁСТКИЕ ПРАВИЛА:
+1. ВЫХОД — только один JSON-объект. Никакого markdown, преамбулы, объяснений, ``` или текста до/после JSON.
+2. Не придумывай данные. Если поля нет в тексте — null.
+3. Дата в формате YYYY-MM-DD. Если в документе DD.MM.YYYY — конвертируй. Если года нет — null.
+4. summary — пересказ того, что написано в документе. Не добавляй интерпретации, диагнозов, выводов.
+5. Отвечай на русском.
+
+Схема ответа:
 {
   "doc_class": "lab_results|prescription|estimate|referral|consultation|research|certificate|other",
-  "doc_type": "тип (blood/biochemistry/hormones/eeg/holter/mri/ultrasound/ecg/plan/receipt/other)",
+  "doc_type": "blood|biochemistry|hormones|eeg|holter|mri|ultrasound|ecg|plan|receipt|other",
   "title": "краткое название документа",
   "collected_at": "YYYY-MM-DD или null",
-  "lab_name": "название лаборатории или клиники или null",
-  "summary": "1-2 предложения: что это за документ и ключевая информация из него"
+  "lab_name": "название лаборатории или null",
+  "summary": "1-2 предложения, только то что есть в тексте"
 }
 
 Классы:
@@ -32,24 +42,26 @@ CLASSIFICATION_PROMPT = """Классифицируй медицинский д�
 === ТЕКСТ ===
 """
 
-EXTRACTION_PROMPT = """Ты — медицинский парсер лабораторных анализов. Из текста ниже извлеки ВСЕ лабораторные показатели.
+EXTRACTION_PROMPT = """Ты — детерминированный парсер лабораторных анализов. Извлеки ВСЕ числовые показатели из текста.
 
-ПРАВИЛА:
-1. Извлеки КАЖДЫЙ показатель — не пропускай ни один
-2. Если значение нечисловое (например "отрицательный", "не обнаружено") — пропусти, берём только числовые
-3. Нормализуй название показателя (biomarker) на русском: "Гемоглобин", "Глюкоза", "ТТГ", "Холестерин общий" и т.д.
-4. Сохрани оригинальное название из PDF как biomarker_original
-5. Определи категорию: blood (ОАК), biochemistry (биохимия), hormones, vitamins, urine, coagulation, immunology, other
-6. Единицы измерения — как в PDF
-7. Границы нормы (ref_low, ref_high) — из PDF. Если указан только один предел, второй = null. Если нет нормы — оба null
-8. Определи дату сдачи анализа (collected_at) в формате YYYY-MM-DD. Ищи: "дата забора", "дата сдачи", дату в шапке
-9. Определи название лаборатории (lab_name). Ищи: "Инвитро", "Helix", "KDL", "Гемотест", "CMD" и др.
-10. Если дата или лаборатория не найдены — верни null для них
+ЖЁСТКИЕ ПРАВИЛА:
+1. ВЫХОД — только один JSON-объект. Никакого markdown, текста до/после, никаких ``` и комментариев.
+2. НЕ выдумывай показатели, значения, единицы или границы нормы. Только то, что дословно есть в тексте.
+3. Извлеки КАЖДЫЙ числовой показатель — не пропускай ни одного.
+4. Если значение нечисловое («отрицательный», «не обнаружено», «следы») — пропусти.
+5. Если число записано с запятой («3,9») — конвертируй в float через точку (3.9).
+6. Единицы — копируй из PDF буква в букву. Не конвертируй и не нормализуй (если в PDF «мМЕ/л» — пиши «мМЕ/л», не «мЕд/л»).
+7. ref_low / ref_high — числа из PDF. Если указан один предел («<5.2», «>30») — другой = null. Если нормы вообще нет — оба null.
+8. biomarker — нормализуй на русском: «Гемоглобин», «Глюкоза», «ТТГ», «Холестерин общий», «АЛТ», «АСТ», «ИФР-1», «25-OH витамин D» и т.д.
+9. biomarker_original — точное название как в PDF (включая скобки и латиницу).
+10. category — одно из: blood (ОАК), biochemistry, hormones, vitamins, urine, coagulation, immunology, other.
+11. collected_at — YYYY-MM-DD. Ищи «дата забора», «дата сдачи», дату в шапке. Не было найдено — null.
+12. lab_name — название клиники/лаборатории если оно явно указано (Инвитро, Helix, KDL, Гемотест, CMD, ЦМД, ЛабКвест и др.). Иначе null.
 
-Верни СТРОГО JSON (без markdown, без ```):
+Схема ответа:
 {
-  "collected_at": "YYYY-MM-DD" или null,
-  "lab_name": "название" или null,
+  "collected_at": "YYYY-MM-DD" | null,
+  "lab_name": "название" | null,
   "results": [
     {
       "biomarker": "Гемоглобин",
@@ -69,7 +81,7 @@ EXTRACTION_PROMPT = """Ты — медицинский парсер лабора
 
 def classify_document(
     raw_text: str,
-    model: str = "claude-opus-4-7",
+    model: str | None = None,
     timeout: int = 60,
 ) -> dict:
     """
@@ -77,18 +89,13 @@ def classify_document(
     """
     prompt = CLASSIFICATION_PROMPT + raw_text[:8000]
     try:
-        log.info("Classifying document with model=%s (%d chars)", model, len(raw_text))
-        result = subprocess.run(
-            ["claude", "-p", "--model", model, prompt],
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
-        if result.returncode == 0:
-            parsed = _parse_json(result.stdout.strip())
-            if parsed and "doc_class" in parsed:
-                log.info("Classified: doc_class=%s doc_type=%s", parsed["doc_class"], parsed.get("doc_type"))
-                return parsed
+        raw = chat_completion(prompt, model=model, max_tokens=2048, timeout=timeout)
+        parsed = _parse_json(raw)
+        if parsed and "doc_class" in parsed:
+            log.info("Classified: doc_class=%s doc_type=%s", parsed["doc_class"], parsed.get("doc_type"))
+            return parsed
+    except LLMError as exc:
+        log.warning("Classification LLM failed: %s", exc)
     except Exception as exc:
         log.warning("Classification failed: %s", exc)
 
@@ -98,9 +105,9 @@ def classify_document(
 
 def extract_biomarkers(
     raw_text: str,
-    primary_model: str = "claude-opus-4-7",
-    fallback_model: str = "claude-opus-4-7",
-    timeout: int = 120,
+    primary_model: str | None = None,
+    fallback_model: str | None = None,
+    timeout: int = 240,
 ) -> dict:
     """
     Send raw PDF text to LLM for structured extraction.
@@ -109,27 +116,17 @@ def extract_biomarkers(
     """
     prompt = EXTRACTION_PROMPT + raw_text[:15000]  # limit to avoid token overflow
 
-    for model in [primary_model, fallback_model]:
+    models_to_try = [primary_model] if primary_model == fallback_model else [primary_model, fallback_model]
+    for model in models_to_try:
         try:
-            log.info("Extracting biomarkers with model=%s (text %d chars)", model, len(raw_text))
-            result = subprocess.run(
-                ["claude", "-p", "--model", model, prompt],
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-            )
-            if result.returncode != 0:
-                log.warning("claude CLI failed (rc=%d) model=%s: %s",
-                            result.returncode, model, result.stderr.strip()[:200])
-                continue
-
-            parsed = _parse_json(result.stdout.strip())
+            raw = chat_completion(prompt, model=model, max_tokens=8000, timeout=timeout)
+            parsed = _parse_json(raw)
             if parsed and "results" in parsed:
                 log.info("Extracted %d biomarkers with %s", len(parsed["results"]), model)
                 return parsed
-
-        except subprocess.TimeoutExpired:
-            log.warning("Extraction timeout model=%s", model)
+            log.warning("Extraction returned no 'results' field, model=%s", model)
+        except LLMError as exc:
+            log.warning("Extraction LLM error model=%s: %s", model, exc)
         except Exception as exc:
             log.warning("Extraction error model=%s: %s", model, exc)
 

@@ -1,11 +1,11 @@
 """LLM-based biomarker extraction from raw PDF text."""
 from __future__ import annotations
 
+import json
 import logging
+import re
+import subprocess
 from datetime import date
-
-from llm_client import LLMError, chat_completion, parse_json_response
-from llm_schemas import CLASSIFY_DOCUMENT_SCHEMA, EXTRACT_BIOMARKERS_SCHEMA
 
 log = logging.getLogger("health-bot")
 
@@ -80,7 +80,7 @@ EXTRACTION_PROMPT = """Ты — детерминированный парсер 
 
 def classify_document(
     raw_text: str,
-    model: str | None = None,
+    model: str = "claude-opus-4-7",
     timeout: int = 60,
 ) -> dict:
     """
@@ -88,19 +88,18 @@ def classify_document(
     """
     prompt = CLASSIFICATION_PROMPT + raw_text[:8000]
     try:
-        raw = chat_completion(
-            prompt,
-            model=model,
-            max_tokens=2048,
+        log.info("Classifying document with model=%s (%d chars)", model, len(raw_text))
+        result = subprocess.run(
+            ["claude", "-p", "--model", model, prompt],
+            capture_output=True,
+            text=True,
             timeout=timeout,
-            json_schema=CLASSIFY_DOCUMENT_SCHEMA,
         )
-        parsed = parse_json_response(raw)
-        if parsed and "doc_class" in parsed:
-            log.info("Classified: doc_class=%s doc_type=%s", parsed["doc_class"], parsed.get("doc_type"))
-            return parsed
-    except LLMError as exc:
-        log.warning("Classification LLM failed: %s", exc)
+        if result.returncode == 0:
+            parsed = _parse_json(result.stdout.strip())
+            if parsed and "doc_class" in parsed:
+                log.info("Classified: doc_class=%s doc_type=%s", parsed["doc_class"], parsed.get("doc_type"))
+                return parsed
     except Exception as exc:
         log.warning("Classification failed: %s", exc)
 
@@ -110,8 +109,8 @@ def classify_document(
 
 def extract_biomarkers(
     raw_text: str,
-    primary_model: str | None = None,
-    fallback_model: str | None = None,
+    primary_model: str = "claude-opus-4-7",
+    fallback_model: str = "claude-opus-4-7",
     timeout: int = 240,
 ) -> dict:
     """
@@ -121,27 +120,46 @@ def extract_biomarkers(
     """
     prompt = EXTRACTION_PROMPT + raw_text[:15000]  # limit to avoid token overflow
 
-    models_to_try = [primary_model] if primary_model == fallback_model else [primary_model, fallback_model]
-    for model in models_to_try:
+    for model in [primary_model, fallback_model]:
         try:
-            raw = chat_completion(
-                prompt,
-                model=model,
-                max_tokens=8000,
+            log.info("Extracting biomarkers with model=%s (text %d chars)", model, len(raw_text))
+            result = subprocess.run(
+                ["claude", "-p", "--model", model, prompt],
+                capture_output=True,
+                text=True,
                 timeout=timeout,
-                json_schema=EXTRACT_BIOMARKERS_SCHEMA,
             )
-            parsed = parse_json_response(raw)
+            if result.returncode != 0:
+                log.warning("claude CLI failed (rc=%d) model=%s: %s",
+                            result.returncode, model, result.stderr.strip()[:200])
+                continue
+
+            parsed = _parse_json(result.stdout.strip())
             if parsed and "results" in parsed:
                 log.info("Extracted %d biomarkers with %s", len(parsed["results"]), model)
                 return parsed
-            log.warning("Extraction returned no 'results' field, model=%s", model)
-        except LLMError as exc:
-            log.warning("Extraction LLM error model=%s: %s", model, exc)
+
+        except subprocess.TimeoutExpired:
+            log.warning("Extraction timeout model=%s", model)
         except Exception as exc:
             log.warning("Extraction error model=%s: %s", model, exc)
 
     raise RuntimeError("Failed to extract biomarkers from PDF text")
+
+
+def _parse_json(raw: str) -> dict | None:
+    """Extract JSON from LLM response, handling markdown wrappers."""
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        pass
+    m = re.search(r"\{.*\}", raw, re.DOTALL)
+    if m:
+        try:
+            return json.loads(m.group(0))
+        except json.JSONDecodeError:
+            pass
+    return None
 
 
 def validate_results(data: dict, fallback_date: date | None = None) -> tuple[list[dict], list[str]]:

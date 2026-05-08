@@ -17,6 +17,8 @@ import hashlib
 import json
 import logging
 import os
+import re
+import subprocess
 import sys
 from datetime import datetime, timezone, timedelta, date
 from pathlib import Path
@@ -25,9 +27,6 @@ import clickhouse_connect
 import requests
 import yaml
 from dotenv import load_dotenv
-
-from llm_client import LLMError, _default_model, chat_completion, parse_json_response
-from llm_schemas import DIGEST_SCHEMA, PROFILE_SCHEMA
 
 PROJECT_DIR = Path(__file__).resolve().parent
 LOGS_DIR = PROJECT_DIR / "logs"
@@ -61,18 +60,25 @@ def get_ch():
     )
 
 
-def call_llm(prompt: str, model: str | None = None, timeout: int = 240,
-             retries: int = 2, max_tokens: int = 8000,
-             json_schema: dict | None = None) -> str:
-    """Call LLM via OpenRouter. Kept name-stable wrapper around llm_client."""
-    return chat_completion(
-        prompt,
-        model=model or _default_model(),
-        max_tokens=max_tokens,
-        timeout=timeout,
-        retries=retries,
-        json_schema=json_schema,
-    )
+def call_claude(prompt: str, model: str = "claude-opus-4-7", timeout: int = 240,
+                retries: int = 2) -> str:
+    """Call Claude via local CLI (privacy-preserving Anthropic commercial terms)."""
+    logging.info("Calling claude model=%s (%d chars)", model, len(prompt))
+    last_exc: Exception | None = None
+    for attempt in range(1, retries + 2):
+        result = subprocess.run(
+            ["claude", "-p", "--model", model, prompt],
+            capture_output=True, text=True, timeout=timeout,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+        detail = result.stderr[:300] or result.stdout[:300] or "(no output)"
+        last_exc = RuntimeError(f"claude failed (rc={result.returncode}): {detail}")
+        if attempt <= retries:
+            logging.warning("claude attempt %d/%d failed: %s — retrying in 30s",
+                            attempt, retries + 1, detail)
+            import time; time.sleep(30)
+    raise last_exc
 
 
 def send_telegram(text: str, chat_id: str | None = None) -> bool:
@@ -163,10 +169,11 @@ def run_digest(log: logging.Logger, owner_id: str = "524605979") -> int:
 {chat_text}"""
 
     try:
-        raw = call_llm(prompt, timeout=240, max_tokens=4000, json_schema=DIGEST_SCHEMA)
-        data = parse_json_response(raw)
-        if not data:
+        raw = call_claude(prompt, "claude-opus-4-7", timeout=240)
+        m = re.search(r"\{.*\}", raw, re.DOTALL)
+        if not m:
             raise ValueError(f"No JSON: {raw[:200]}")
+        data = json.loads(m.group(0))
     except Exception as exc:
         log.error("Digest LLM failed: %s", exc)
         return 2
@@ -177,7 +184,7 @@ def run_digest(log: logging.Logger, owner_id: str = "524605979") -> int:
         data.get("topics", []),
         data.get("user_concerns", ""),
         data.get("new_info", ""),
-        _default_model(),
+        "claude-opus-4-7",
         owner_id,
     ]], column_names=["date", "digest", "topics", "user_concerns", "new_info", "model", "owner_id"])
 
@@ -342,10 +349,11 @@ def run_profile(log: logging.Logger, owner_id: str = "524605979") -> int:
 }}"""
 
     try:
-        raw = call_llm(prompt, timeout=300, max_tokens=8000, json_schema=PROFILE_SCHEMA)
-        data = parse_json_response(raw)
-        if not data:
+        raw = call_claude(prompt, "claude-opus-4-7", timeout=300)
+        m = re.search(r"\{.*\}", raw, re.DOTALL)
+        if not m:
             raise ValueError(f"No JSON: {raw[:300]}")
+        data = json.loads(m.group(0))
     except Exception as exc:
         log.error("Profile LLM failed: %s", exc)
         send_telegram(f"⚠️ <b>Diagnostician failed</b>\n\n{str(exc)[:500]}", owner_id)
@@ -365,7 +373,7 @@ def run_profile(log: logging.Logger, owner_id: str = "524605979") -> int:
         json.dumps(data.get("missing_data", []), ensure_ascii=False),
         json.dumps(data.get("alerts", []), ensure_ascii=False),
         data_hash,
-        _default_model(),
+        "claude-opus-4-7",
         owner_id,
     ]], column_names=[
         "date", "profile_text", "overall_status", "key_findings",

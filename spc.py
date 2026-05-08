@@ -34,6 +34,11 @@ class SPCResult:
     ref_high: float | None = None
     points: list[SPCPoint] = field(default_factory=list)
     alerts: list[str] = field(default_factory=list)
+    # Structured signals — same content as alerts but machine-readable for
+    # downstream consumers (alerters, evaluators) that don't want to regex
+    # localized strings. Each entry: {"rule": <stable id>, "direction":
+    # "up"|"down"|None, "severity": "warn"|"critical"}.
+    signals: list[dict] = field(default_factory=list)
     trend: str = "stable"  # stable/rising/declining/volatile/shift
 
 
@@ -80,7 +85,9 @@ def compute_xmr(biomarker: str, points: list[SPCPoint]) -> SPCResult | None:
     )
 
     # ── Western Electric rules ──
-    result.alerts = _check_western_electric(values, x_bar, ucl, lcl, mr_bar)
+    result.alerts, result.signals = _check_western_electric(
+        values, x_bar, ucl, lcl, mr_bar,
+    )
     result.trend = _classify_trend(values, x_bar, ucl, lcl)
 
     return result
@@ -88,9 +95,16 @@ def compute_xmr(biomarker: str, points: list[SPCPoint]) -> SPCResult | None:
 
 def _check_western_electric(
     values: list[float], x_bar: float, ucl: float, lcl: float, mr_bar: float,
-) -> list[str]:
-    """Apply Western Electric / Nelson rules for anomaly detection."""
+) -> tuple[list[str], list[dict]]:
+    """Apply Western Electric / Nelson rules for anomaly detection.
+
+    Returns ``(alerts, signals)`` where ``alerts`` is the existing list of
+    localized RU strings (kept for backward-compatible /spc reports) and
+    ``signals`` is a parallel list of structured dicts for downstream
+    consumers — see ``SPCResult.signals`` docstring.
+    """
     alerts: list[str] = []
+    signals: list[dict] = []
     n = len(values)
     sigma = mr_bar / 1.128 if mr_bar > 0 else 0.0
     zone_b_upper = x_bar + 2 * sigma
@@ -98,14 +112,22 @@ def _check_western_electric(
     zone_c_upper = x_bar + sigma
     zone_c_lower = x_bar - sigma
 
-    # Rule 1: Point beyond UCL/LCL (3σ)
+    # Rule 1: Point beyond UCL/LCL (3σ) — critical
     for i, v in enumerate(values):
         if v > ucl:
             alerts.append(f"Точка {i + 1} выше UCL ({v:.1f} > {ucl:.1f})")
+            signals.append({
+                "rule": "beyond_ucl", "direction": "up",
+                "severity": "critical", "point_index": i,
+            })
         elif v < lcl:
             alerts.append(f"Точка {i + 1} ниже LCL ({v:.1f} < {lcl:.1f})")
+            signals.append({
+                "rule": "beyond_lcl", "direction": "down",
+                "severity": "critical", "point_index": i,
+            })
 
-    # Rule 2: 7+ points on same side of center (trend/shift)
+    # Rule 2: 7+ points on same side of center (trend/shift) — critical
     if n >= 7:
         above = 0
         below = 0
@@ -116,37 +138,80 @@ def _check_western_electric(
                 below += 1
         if above >= 7:
             alerts.append(f"7 точек подряд выше среднего — вероятный сдвиг вверх")
+            signals.append({
+                "rule": "7_above_mean", "direction": "up", "severity": "critical",
+            })
         elif below >= 7:
             alerts.append(f"7 точек подряд ниже среднего — вероятный сдвиг вниз")
+            signals.append({
+                "rule": "7_below_mean", "direction": "down", "severity": "critical",
+            })
 
-    # Rule 3: 6+ points trending in one direction
+    # Rule 3: 6+ points trending in one direction — warn
     if n >= 6:
         rising = all(values[i] > values[i - 1] for i in range(n - 5, n))
         falling = all(values[i] < values[i - 1] for i in range(n - 5, n))
         if rising:
             alerts.append(f"6 точек подряд растут — устойчивый восходящий тренд")
+            signals.append({
+                "rule": "6_consecutive_rising", "direction": "up", "severity": "warn",
+            })
         elif falling:
             alerts.append(f"6 точек подряд падают — устойчивый нисходящий тренд")
+            signals.append({
+                "rule": "6_consecutive_falling", "direction": "down", "severity": "warn",
+            })
 
-    # Rule 4: 2 out of 3 beyond 2σ (same side)
+    # Rule 3b: 3 consecutive rising/falling — early warn (only if rule 3 didn't fire)
+    if n >= 3:
+        already_long_run = any(
+            s["rule"] in ("6_consecutive_rising", "6_consecutive_falling")
+            for s in signals
+        )
+        if not already_long_run:
+            rising3 = all(values[i] > values[i - 1] for i in range(n - 2, n))
+            falling3 = all(values[i] < values[i - 1] for i in range(n - 2, n))
+            if rising3:
+                signals.append({
+                    "rule": "3_consecutive_rising", "direction": "up",
+                    "severity": "warn",
+                })
+            elif falling3:
+                signals.append({
+                    "rule": "3_consecutive_falling", "direction": "down",
+                    "severity": "warn",
+                })
+
+    # Rule 4: 2 out of 3 beyond 2σ (same side) — warn
     if n >= 3:
         last3 = values[-3:]
         above_2s = sum(1 for v in last3 if v > zone_b_upper)
         below_2s = sum(1 for v in last3 if v < zone_b_lower)
         if above_2s >= 2:
             alerts.append(f"2 из 3 последних точек выше 2σ — возможный выброс")
+            signals.append({
+                "rule": "2_of_3_above_2sigma", "direction": "up", "severity": "warn",
+            })
         if below_2s >= 2:
             alerts.append(f"2 из 3 последних точек ниже 2σ — возможный выброс")
+            signals.append({
+                "rule": "2_of_3_below_2sigma", "direction": "down", "severity": "warn",
+            })
 
-    # Rule 5: Last point vs previous — big jump
+    # Rule 5: Last point vs previous — big jump (warn)
     if n >= 2 and mr_bar > 0:
         last_mr = abs(values[-1] - values[-2])
         if last_mr > 3.27 * mr_bar:  # D4 * mR-bar
             alerts.append(
                 f"Резкое изменение: {values[-2]:.1f} → {values[-1]:.1f} "
                 f"(скачок {last_mr:.1f}, лимит {3.27 * mr_bar:.1f})")
+            direction = "up" if values[-1] > values[-2] else "down"
+            signals.append({
+                "rule": "moving_range_jump", "direction": direction,
+                "severity": "warn",
+            })
 
-    return alerts
+    return alerts, signals
 
 
 def _classify_trend(

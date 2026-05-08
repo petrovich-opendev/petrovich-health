@@ -28,6 +28,7 @@ import yaml
 from dotenv import load_dotenv
 
 from llm_client import LLMError, _default_model, chat_completion
+from llm_schemas import DIGEST_SCHEMA, PROFILE_SCHEMA
 
 PROJECT_DIR = Path(__file__).resolve().parent
 LOGS_DIR = PROJECT_DIR / "logs"
@@ -62,7 +63,8 @@ def get_ch():
 
 
 def call_llm(prompt: str, model: str | None = None, timeout: int = 240,
-             retries: int = 2, max_tokens: int = 8000) -> str:
+             retries: int = 2, max_tokens: int = 8000,
+             json_schema: dict | None = None) -> str:
     """Call LLM via OpenRouter. Kept name-stable wrapper around llm_client."""
     return chat_completion(
         prompt,
@@ -70,6 +72,7 @@ def call_llm(prompt: str, model: str | None = None, timeout: int = 240,
         max_tokens=max_tokens,
         timeout=timeout,
         retries=retries,
+        json_schema=json_schema,
     )
 
 
@@ -161,11 +164,8 @@ def run_digest(log: logging.Logger, owner_id: str = "524605979") -> int:
 {chat_text}"""
 
     try:
-        raw = call_llm(prompt, timeout=240, max_tokens=4000)
-        m = re.search(r"\{.*\}", raw, re.DOTALL)
-        if not m:
-            raise ValueError(f"No JSON: {raw[:200]}")
-        data = json.loads(m.group(0))
+        raw = call_llm(prompt, timeout=240, max_tokens=4000, json_schema=DIGEST_SCHEMA)
+        data = json.loads(raw)
     except Exception as exc:
         log.error("Digest LLM failed: %s", exc)
         return 2
@@ -341,11 +341,8 @@ def run_profile(log: logging.Logger, owner_id: str = "524605979") -> int:
 }}"""
 
     try:
-        raw = call_llm(prompt, timeout=300, max_tokens=8000)
-        m = re.search(r"\{.*\}", raw, re.DOTALL)
-        if not m:
-            raise ValueError(f"No JSON: {raw[:300]}")
-        data = json.loads(m.group(0))
+        raw = call_llm(prompt, timeout=300, max_tokens=8000, json_schema=PROFILE_SCHEMA)
+        data = json.loads(raw)
     except Exception as exc:
         log.error("Profile LLM failed: %s", exc)
         send_telegram(f"⚠️ <b>Diagnostician failed</b>\n\n{str(exc)[:500]}", owner_id)

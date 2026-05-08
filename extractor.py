@@ -7,6 +7,7 @@ import re
 from datetime import date
 
 from llm_client import LLMError, chat_completion
+from llm_schemas import CLASSIFY_DOCUMENT_SCHEMA, EXTRACT_BIOMARKERS_SCHEMA
 
 log = logging.getLogger("health-bot")
 
@@ -89,7 +90,13 @@ def classify_document(
     """
     prompt = CLASSIFICATION_PROMPT + raw_text[:8000]
     try:
-        raw = chat_completion(prompt, model=model, max_tokens=2048, timeout=timeout)
+        raw = chat_completion(
+            prompt,
+            model=model,
+            max_tokens=2048,
+            timeout=timeout,
+            json_schema=CLASSIFY_DOCUMENT_SCHEMA,
+        )
         parsed = _parse_json(raw)
         if parsed and "doc_class" in parsed:
             log.info("Classified: doc_class=%s doc_type=%s", parsed["doc_class"], parsed.get("doc_type"))
@@ -119,7 +126,13 @@ def extract_biomarkers(
     models_to_try = [primary_model] if primary_model == fallback_model else [primary_model, fallback_model]
     for model in models_to_try:
         try:
-            raw = chat_completion(prompt, model=model, max_tokens=8000, timeout=timeout)
+            raw = chat_completion(
+                prompt,
+                model=model,
+                max_tokens=8000,
+                timeout=timeout,
+                json_schema=EXTRACT_BIOMARKERS_SCHEMA,
+            )
             parsed = _parse_json(raw)
             if parsed and "results" in parsed:
                 log.info("Extracted %d biomarkers with %s", len(parsed["results"]), model)

@@ -42,8 +42,12 @@ def chat_completion(
     max_tokens: int = 8000,
     timeout: int = DEFAULT_TIMEOUT,
     retries: int = DEFAULT_RETRIES,
+    json_schema: dict | None = None,
 ) -> str:
     """Send a single-turn user message and return the assistant text.
+
+    If json_schema is provided, the response is constrained to that shape
+    via OpenRouter's response_format and is guaranteed JSON-parseable.
 
     Raises LLMError on persistent failure.
     """
@@ -57,6 +61,8 @@ def chat_completion(
         "messages": [{"role": "user", "content": prompt}],
         "max_tokens": max_tokens,
     }
+    if json_schema is not None:
+        body["response_format"] = {"type": "json_schema", "json_schema": json_schema}
     data_collection = os.getenv("OR_DATA_COLLECTION", "deny").strip().lower()
     if data_collection != "allow":
         body["provider"] = {"data_collection": "deny", "allow_fallbacks": True}

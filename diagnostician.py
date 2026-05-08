@@ -17,7 +17,6 @@ import hashlib
 import json
 import logging
 import os
-import re
 import sys
 from datetime import datetime, timezone, timedelta, date
 from pathlib import Path
@@ -27,7 +26,7 @@ import requests
 import yaml
 from dotenv import load_dotenv
 
-from llm_client import LLMError, _default_model, chat_completion
+from llm_client import LLMError, _default_model, chat_completion, parse_json_response
 from llm_schemas import DIGEST_SCHEMA, PROFILE_SCHEMA
 
 PROJECT_DIR = Path(__file__).resolve().parent
@@ -165,7 +164,9 @@ def run_digest(log: logging.Logger, owner_id: str = "524605979") -> int:
 
     try:
         raw = call_llm(prompt, timeout=240, max_tokens=4000, json_schema=DIGEST_SCHEMA)
-        data = json.loads(raw)
+        data = parse_json_response(raw)
+        if not data:
+            raise ValueError(f"No JSON: {raw[:200]}")
     except Exception as exc:
         log.error("Digest LLM failed: %s", exc)
         return 2
@@ -342,7 +343,9 @@ def run_profile(log: logging.Logger, owner_id: str = "524605979") -> int:
 
     try:
         raw = call_llm(prompt, timeout=300, max_tokens=8000, json_schema=PROFILE_SCHEMA)
-        data = json.loads(raw)
+        data = parse_json_response(raw)
+        if not data:
+            raise ValueError(f"No JSON: {raw[:300]}")
     except Exception as exc:
         log.error("Profile LLM failed: %s", exc)
         send_telegram(f"⚠️ <b>Diagnostician failed</b>\n\n{str(exc)[:500]}", owner_id)

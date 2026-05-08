@@ -1,12 +1,10 @@
 """LLM-based biomarker extraction from raw PDF text."""
 from __future__ import annotations
 
-import json
 import logging
-import re
 from datetime import date
 
-from llm_client import LLMError, chat_completion
+from llm_client import LLMError, chat_completion, parse_json_response
 from llm_schemas import CLASSIFY_DOCUMENT_SCHEMA, EXTRACT_BIOMARKERS_SCHEMA
 
 log = logging.getLogger("health-bot")
@@ -97,7 +95,7 @@ def classify_document(
             timeout=timeout,
             json_schema=CLASSIFY_DOCUMENT_SCHEMA,
         )
-        parsed = _parse_json(raw)
+        parsed = parse_json_response(raw)
         if parsed and "doc_class" in parsed:
             log.info("Classified: doc_class=%s doc_type=%s", parsed["doc_class"], parsed.get("doc_type"))
             return parsed
@@ -133,7 +131,7 @@ def extract_biomarkers(
                 timeout=timeout,
                 json_schema=EXTRACT_BIOMARKERS_SCHEMA,
             )
-            parsed = _parse_json(raw)
+            parsed = parse_json_response(raw)
             if parsed and "results" in parsed:
                 log.info("Extracted %d biomarkers with %s", len(parsed["results"]), model)
                 return parsed
@@ -144,25 +142,6 @@ def extract_biomarkers(
             log.warning("Extraction error model=%s: %s", model, exc)
 
     raise RuntimeError("Failed to extract biomarkers from PDF text")
-
-
-def _parse_json(raw: str) -> dict | None:
-    """Extract JSON from LLM response, handling markdown wrappers."""
-    # Try direct parse
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        pass
-
-    # Try finding JSON block
-    match = re.search(r"\{.*\}", raw, re.DOTALL)
-    if match:
-        try:
-            return json.loads(match.group(0))
-        except json.JSONDecodeError:
-            pass
-
-    return None
 
 
 def validate_results(data: dict, fallback_date: date | None = None) -> tuple[list[dict], list[str]]:

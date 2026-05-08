@@ -6,8 +6,10 @@ Configured via env:
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
+import re
 import time
 
 import requests
@@ -34,6 +36,23 @@ ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
 
 class LLMError(RuntimeError):
     pass
+
+
+def parse_json_response(raw: str) -> dict | None:
+    """Extract JSON object from an LLM response, tolerating markdown wrappers."""
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        pass
+    if not isinstance(raw, str):
+        return None
+    match = re.search(r"\{.*\}", raw, re.DOTALL)
+    if match:
+        try:
+            return json.loads(match.group(0))
+        except json.JSONDecodeError:
+            pass
+    return None
 
 
 def chat_completion(

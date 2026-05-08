@@ -5,6 +5,7 @@ import logging
 import subprocess
 from datetime import date
 
+from extractor_cache import cache_get, cache_put, hash_text
 from utils import parse_json_response
 
 log = logging.getLogger("health-bot")
@@ -118,6 +119,15 @@ def extract_biomarkers(
 
     Returns dict with keys: collected_at, lab_name, results (list of biomarkers).
     """
+    text_hash = hash_text(raw_text)
+    cached = cache_get(text_hash)
+    if cached is not None:
+        log.info(
+            "extract_biomarkers cache hit hash=%s biomarkers=%d",
+            text_hash[:12], len(cached.get("results", [])),
+        )
+        return cached
+
     prompt = EXTRACTION_PROMPT + raw_text[:15000]  # limit to avoid token overflow
 
     for model in [primary_model, fallback_model]:
@@ -137,6 +147,7 @@ def extract_biomarkers(
             parsed = parse_json_response(result.stdout.strip())
             if parsed and "results" in parsed:
                 log.info("Extracted %d biomarkers with %s", len(parsed["results"]), model)
+                cache_put(text_hash, parsed)
                 return parsed
 
         except subprocess.TimeoutExpired:

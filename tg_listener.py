@@ -2122,6 +2122,34 @@ def _reminder_loop() -> None:
         time.sleep(60)
 
 
+# Module-level liveness marker — updated by main loop after a successful
+# get_updates(), read by the heartbeat thread. Naive datetime in local tz is
+# fine; we only need a coarse "when was the last poll".
+_LAST_POLL_TS: datetime | None = None
+
+
+def _heartbeat_loop() -> None:
+    """Background thread: write a liveness signal every 60s.
+
+    File: logs/heartbeat-YYYY-MM-DD.log (rotated by date).
+    Line: "<ISO now> alive last_poll=<ISO ts | never>".
+    External observers can alert if mtime is older than 2 minutes.
+    """
+    logs_dir = Path(__file__).resolve().parent / "logs"
+    while True:
+        try:
+            logs_dir.mkdir(exist_ok=True)
+            now = datetime.now()
+            fname = logs_dir / f"heartbeat-{now.strftime('%Y-%m-%d')}.log"
+            last = _LAST_POLL_TS.isoformat() if _LAST_POLL_TS else "never"
+            line = f"{now.isoformat()} alive last_poll={last}\n"
+            with fname.open("a", encoding="utf-8") as fh:
+                fh.write(line)
+        except Exception as exc:
+            log.error("Heartbeat loop error: %s", exc)
+        time.sleep(60)
+
+
 def main() -> None:
     if not TELEGRAM_BOT_TOKEN:
         log.error("TELEGRAM_BOT_TOKEN not set")
@@ -2146,6 +2174,11 @@ def main() -> None:
     reminder_thread.start()
     log.info("Reminder thread started")
 
+    # Start heartbeat thread (writes logs/heartbeat-YYYY-MM-DD.log every 60s)
+    heartbeat_thread = threading.Thread(target=_heartbeat_loop, daemon=True)
+    heartbeat_thread.start()
+    log.info("Heartbeat thread started")
+
     offset: int | None = None
 
     # Skip pending messages on startup
@@ -2157,9 +2190,11 @@ def main() -> None:
     except Exception as exc:
         log.warning("Failed to skip pending: %s", exc)
 
+    global _LAST_POLL_TS
     while True:
         try:
             updates = get_updates(offset=offset)
+            _LAST_POLL_TS = datetime.now()
             for update in updates:
                 offset = update["update_id"] + 1
                 message = update.get("message")

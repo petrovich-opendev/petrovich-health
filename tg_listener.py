@@ -188,6 +188,17 @@ LOGS_DIR.mkdir(exist_ok=True)
 # Key: owner_id, Value: {"action": "feedback|goal_type|goal_weight|...", "data": {}}
 _pending: dict[str, dict] = {}
 
+# ── Pending extractions awaiting user confirm (PDF / photo / text labs) ──
+# Key: token (8-char uuid prefix). Value:
+#   {"owner_id": str, "rows": [valid_rows], "warnings": [...],
+#    "doc_meta": {"lab_name","collected_at","source_file","kind",
+#                 "file_size","page_count","raw_text"},
+#    "ts": datetime}
+# Stored extractions never auto-insert; user must press ✅ Принять in TG.
+# Pruned older than 1 hour at each new request — see _prune_pending_extractions.
+_PENDING_EXTRACTIONS: dict[str, dict] = {}
+_PENDING_EXTRACTION_TTL_SEC = 3600
+
 
 def setup_logging() -> logging.Logger:
     log_file = LOGS_DIR / f"bot-{datetime.now(MSK_TZ).strftime('%Y-%m-%d')}.log"
@@ -217,16 +228,26 @@ def tg_api(method: str, **kwargs) -> dict:
 
 
 def get_updates(offset: int | None = None) -> list[dict]:
-    params: dict = {"timeout": POLL_TIMEOUT_SEC, "allowed_updates": ["message"]}
+    params: dict = {"timeout": POLL_TIMEOUT_SEC,
+                    "allowed_updates": ["message", "callback_query"]}
     if offset is not None:
         params["offset"] = offset
     return tg_api("getUpdates", **params).get("result", [])
 
 
-def send_message(chat_id: str, text: str) -> None:
-    for chunk in split_message(text):
-        tg_api("sendMessage", chat_id=chat_id, text=chunk,
-               parse_mode="HTML", disable_web_page_preview=True)
+def send_message(chat_id: str, text: str,
+                 reply_markup: dict | None = None) -> None:
+    chunks = split_message(text)
+    # reply_markup attaches to the LAST chunk only (Telegram convention —
+    # one keyboard per logical message, even when split for the 4096 cap).
+    for i, chunk in enumerate(chunks):
+        params: dict = {
+            "chat_id": chat_id, "text": chunk,
+            "parse_mode": "HTML", "disable_web_page_preview": True,
+        }
+        if reply_markup is not None and i == len(chunks) - 1:
+            params["reply_markup"] = reply_markup
+        tg_api("sendMessage", **params)
 
 
 def send_photo(chat_id: str, photo_bytes: bytes, caption: str = "") -> None:
@@ -542,6 +563,249 @@ def process_pdf(file_id: str, file_name: str, chat_id: str, owner_id: str = "524
     return report
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Extraction confirmation flow (PDF / photo / text)
+# ─────────────────────────────────────────────────────────────────────────────
+def _prune_pending_extractions() -> None:
+    """Drop entries older than _PENDING_EXTRACTION_TTL_SEC. Cheap, called inline."""
+    now = datetime.now()
+    expired = [
+        tok for tok, e in _PENDING_EXTRACTIONS.items()
+        if (now - e.get("ts", now)).total_seconds() > _PENDING_EXTRACTION_TTL_SEC
+    ]
+    for tok in expired:
+        log.info("Pruning stale pending extraction token=%s owner=%s",
+                 tok, _PENDING_EXTRACTIONS[tok].get("owner_id"))
+        del _PENDING_EXTRACTIONS[tok]
+
+
+def _stash_extraction(owner_id: str, rows: list[dict], warnings: list[str],
+                      doc_meta: dict) -> str:
+    """Save extraction in pending dict, return short token for callback_data.
+
+    Token must fit Telegram's 64-byte callback_data limit alongside the
+    "extract_accept:" prefix → 8-char uuid prefix is plenty.
+    """
+    import uuid as _uuid
+    _prune_pending_extractions()
+    token = _uuid.uuid4().hex[:8]
+    _PENDING_EXTRACTIONS[token] = {
+        "owner_id": owner_id,
+        "rows": rows,
+        "warnings": warnings or [],
+        "doc_meta": doc_meta,
+        "ts": datetime.now(),
+    }
+    return token
+
+
+def _format_extraction_preview(rows: list[dict], warnings: list[str],
+                                doc_meta: dict) -> str:
+    """Render preview shown before user confirms the insert.
+
+    Highlights abnormal rows so the user can spot a hallucinated unit/value
+    at a glance (the whole point of this gate).
+    """
+    lab_name = doc_meta.get("lab_name", "?")
+    collected_at = doc_meta.get("collected_at", "?")
+    n = len(rows)
+    lines = [f"📋 <b>Извлечено {n} показателей</b> ({lab_name}, {collected_at})"]
+    lines.append("")
+    for r in rows[:25]:
+        bm = r.get("biomarker", "?")
+        val = r.get("value", "?")
+        unit = r.get("unit", "")
+        ref_low = r.get("ref_low")
+        ref_high = r.get("ref_high")
+        ref = ""
+        if ref_low is not None or ref_high is not None:
+            ref = f" ({ref_low if ref_low is not None else '?'}-"
+            ref += f"{ref_high if ref_high is not None else '?'})"
+        is_abnormal = False
+        try:
+            v = float(val)
+            if ref_low is not None and v < ref_low:
+                is_abnormal = True
+            if ref_high is not None and v > ref_high:
+                is_abnormal = True
+        except (TypeError, ValueError):
+            pass
+        flag = " <b>[ABNORMAL]</b>" if is_abnormal else ""
+        lines.append(f"  • {bm}: {val} {unit}{ref}{flag}")
+    if n > 25:
+        lines.append(f"  ... и ещё {n - 25} показателей")
+
+    sc = doc_meta.get("self_check_discrepancies") or []
+    if sc:
+        lines.append("")
+        lines.append(f"⚠️ <b>Self-check предупреждения ({len(sc)}):</b>")
+        for d in sc[:5]:
+            field = d.get("field", "?")
+            extracted = str(d.get("extracted", ""))[:80]
+            lines.append(f"  • {field}: {extracted}")
+
+    if warnings:
+        lines.append("")
+        lines.append("⚠️ <b>Валидация:</b>")
+        for w in warnings[:5]:
+            lines.append(f"  • {w}")
+
+    lines.append("")
+    lines.append("Что делать с этими данными?")
+    return "\n".join(lines)
+
+
+def _extraction_keyboard(token: str) -> dict:
+    """Inline keyboard with Accept / Edit / Cancel for a pending extraction."""
+    return {
+        "inline_keyboard": [[
+            {"text": "✅ Принять", "callback_data": f"extract_accept:{token}"},
+            {"text": "✏️ Изменить", "callback_data": f"extract_edit:{token}"},
+            {"text": "❌ Отменить", "callback_data": f"extract_cancel:{token}"},
+        ]]
+    }
+
+
+def _send_extraction_preview(chat_id: str, owner_id: str, rows: list[dict],
+                              warnings: list[str], doc_meta: dict) -> None:
+    """Stash pending extraction + send preview with inline keyboard."""
+    token = _stash_extraction(owner_id, rows, warnings, doc_meta)
+    text = _format_extraction_preview(rows, warnings, doc_meta)
+    try:
+        send_message(chat_id, text, reply_markup=_extraction_keyboard(token))
+    except Exception as exc:
+        # If the keyboard send fails (rare), fall back to plain text and
+        # surface the token so user can still confirm via /accept-style.
+        log.error("Extraction preview send failed: %s", exc)
+        send_message(chat_id, f"{text}\n\n(token={token})")
+
+
+def _commit_pending_extraction(token: str) -> tuple[bool, str]:
+    """Apply a previously-stashed extraction to ClickHouse.
+
+    Returns (success, user_message). On success the entry is popped.
+    Idempotent on missing token (already accepted/cancelled): returns False.
+    """
+    entry = _PENDING_EXTRACTIONS.pop(token, None)
+    if entry is None:
+        return False, ("Эта подтверждение уже использовано или истекло "
+                       "(данные не сохранены).")
+    rows = entry.get("rows") or []
+    owner_id = entry["owner_id"]
+    doc_meta = entry.get("doc_meta") or {}
+    if not rows:
+        return False, "Нечего сохранять — список показателей пуст."
+
+    try:
+        count = insert_lab_results(rows, owner_id)
+    except Exception as exc:
+        log.error("insert_lab_results from pending failed: %s", exc)
+        # Re-stash so the user can retry/cancel — losing the extraction here
+        # would force a full re-upload of the PDF.
+        _PENDING_EXTRACTIONS[token] = entry
+        return False, f"Ошибка вставки в БД: {exc}"
+
+    # Mirror the upload_log + glossary writes that the original synchronous
+    # path performed. Failures here are non-fatal (log only) — the lab_results
+    # write already succeeded.
+    try:
+        insert_upload_log(
+            doc_meta.get("source_file", ""),
+            doc_meta.get("file_size", 0),
+            doc_meta.get("page_count", 0),
+            count,
+            doc_meta.get("lab_name", ""),
+            doc_meta.get("collected_at") or date.today(),
+            "ok", "",
+            (doc_meta.get("raw_text") or "")[:10000],
+            owner_id=owner_id,
+        )
+    except Exception as exc:
+        log.warning("upload_log insert from pending failed: %s", exc)
+
+    try:
+        from db import get_client as _gc
+        _ch = _gc()
+        for r in rows:
+            ref = ""
+            if r.get("ref_low") is not None or r.get("ref_high") is not None:
+                ref = f"{r.get('ref_low', '?')}-{r.get('ref_high', '?')}"
+            learn_from_lab_results(_ch, r["biomarker"], r.get("category", ""),
+                                   r.get("unit", ""), ref)
+    except Exception as exc:
+        log.warning("Glossary learn from pending lab failed: %s", exc)
+
+    return True, f"✅ Сохранено {count} показателей"
+
+
+def _handle_extraction_callback(callback: dict) -> None:
+    """Route ``extract_*:<token>`` callback_data to accept/cancel/edit."""
+    cb_id = callback.get("id", "")
+    data = callback.get("data", "") or ""
+    msg = callback.get("message") or {}
+    chat_id = str(msg.get("chat", {}).get("id", ""))
+    if not chat_id:
+        return
+
+    # Always answer the callback to clear the spinner — even if we route to
+    # an error path below.
+    try:
+        tg_api("answerCallbackQuery", callback_query_id=cb_id)
+    except Exception as exc:
+        log.warning("answerCallbackQuery failed: %s", exc)
+
+    # resolve_user reads both `from` (username) and `chat.id` — callbacks
+    # carry both, but in a different shape: re-pack so the same helper works.
+    user = resolve_user({
+        "from": callback.get("from", {}),
+        "chat": msg.get("chat", {}),
+    })
+    if not user:
+        send_message(chat_id, "Доступ запрещён.")
+        return
+    owner_id = user["owner_id"]
+
+    if ":" not in data:
+        return
+    action, _, token = data.partition(":")
+    entry = _PENDING_EXTRACTIONS.get(token)
+
+    if entry and entry.get("owner_id") != owner_id:
+        # Cross-user token — should never happen with Telegram's binding,
+        # but defend against a token leak / replay anyway.
+        log.warning("Cross-user callback: token owner=%s, user=%s",
+                    entry.get("owner_id"), owner_id)
+        send_message(chat_id, "Токен не твой.")
+        return
+
+    if action == "extract_accept":
+        ok, reply = _commit_pending_extraction(token)
+        send_and_log(chat_id, reply, owner_id)
+        return
+
+    if action == "extract_cancel":
+        if _PENDING_EXTRACTIONS.pop(token, None) is None:
+            send_and_log(chat_id, "Эта подтверждение уже истекло.", owner_id)
+        else:
+            send_and_log(chat_id, "❌ Отменено", owner_id)
+        return
+
+    if action == "extract_edit":
+        # v1: edit-text-parser is intentionally a stub — accept/cancel is
+        # the safety win the task requires. Users who need to fix a value
+        # can cancel and re-upload, or wait for v2.
+        send_and_log(
+            chat_id,
+            "✏️ Функция изменения в разработке.\n\n"
+            "Пока — нажми ❌ Отменить и перезалей анализы или попроси "
+            "поправить вручную в чате.",
+            owner_id,
+        )
+        return
+
+    log.warning("Unknown callback action: %s", action)
+
+
 def _process_lab_results(raw_text: str, safe_name: str, file_name: str,
                          file_size: int, page_count: int,
                          lab_name: str, collected_at: date, chat_id: str,
@@ -576,48 +840,22 @@ def _process_lab_results(raw_text: str, safe_name: str, file_name: str,
         row["source_file"] = safe_name
         row["raw_text"] = raw_text[:10000]
 
-    count = insert_lab_results(valid_rows, owner_id)
-    insert_upload_log(safe_name, file_size, page_count, count, lab_name, collected_at,
-                      "ok", "", raw_text[:10000], owner_id=owner_id)
-    log.info("Stored %d biomarkers from %s (lab=%s, date=%s, owner=%s)", count, safe_name, lab_name, collected_at, owner_id)
-
-    # Global glossary: learn biomarker names
-    try:
-        from db import get_client as _gc
-        _ch = _gc()
-        for r in valid_rows:
-            ref = ""
-            if r.get("ref_low") is not None or r.get("ref_high") is not None:
-                ref = f"{r.get('ref_low', '?')}–{r.get('ref_high', '?')}"
-            learn_from_lab_results(_ch, r["biomarker"], r.get("category", ""), r.get("unit", ""), ref)
-    except Exception as exc:
-        log.warning("Glossary learn from lab failed: %s", exc)
-
-    abnormal = [r for r in valid_rows
-                if (r.get("ref_low") is not None and r["value"] < r["ref_low"])
-                or (r.get("ref_high") is not None and r["value"] > r["ref_high"])]
-
-    report_lines = [
-        f"<b>Анализы: {file_name}</b>",
-        f"Лаборатория: {lab_name}",
-        f"Дата: {collected_at}",
-        f"Показателей: <b>{count}</b>",
-    ]
-
-    if abnormal:
-        report_lines.append(f"\n<b>Вне нормы ({len(abnormal)}):</b>")
-        for r in abnormal:
-            ref = f"норма: {r.get('ref_low', '?')}–{r.get('ref_high', '?')}"
-            report_lines.append(f"  🔴 {r['biomarker']}: <b>{r['value']}</b> {r['unit']} ({ref})")
-    else:
-        report_lines.append("\nВсе показатели в норме.")
-
-    if warnings:
-        report_lines.append(f"\nПредупреждения:")
-        for w in warnings[:5]:
-            report_lines.append(f"  ⚠️ {w}")
-
-    return "\n".join(report_lines)
+    # Confirmation gate: stash + preview, do NOT insert until user clicks ✅.
+    # This prevents hallucinated extractor values (wrong unit, wrong number)
+    # from silently landing in lab_results.
+    doc_meta = {
+        "lab_name": lab_name, "collected_at": collected_at,
+        "source_file": safe_name, "kind": "PDF",
+        "file_size": file_size, "page_count": page_count,
+        "raw_text": raw_text[:10000],
+    }
+    _send_extraction_preview(chat_id, owner_id, valid_rows, warnings, doc_meta)
+    log.info("PDF preview sent for confirmation (%d rows, lab=%s, date=%s, owner=%s)",
+             len(valid_rows), lab_name, collected_at, owner_id)
+    # Empty return — preview already sent via inline keyboard. Returning
+    # empty string prevents _finalize_save from chaining an LLM analysis on
+    # un-confirmed data.
+    return ""
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -740,36 +978,17 @@ def process_text_lab_data(text: str, chat_id: str, owner_id: str = "524605979") 
         row["source_file"] = source_name
         row["raw_text"] = text[:10000]
 
-    count = insert_lab_results(valid_rows, owner_id)
-    insert_upload_log(source_name, len(text), 1, count, lab_name, collected_at,
-                      "ok", "", text[:10000], owner_id=owner_id)
-    log.info("Stored %d biomarkers from text input (lab=%s, date=%s, owner=%s)", count, lab_name, collected_at, owner_id)
-
-    abnormal = [r for r in valid_rows
-                if (r.get("ref_low") is not None and r["value"] < r["ref_low"])
-                or (r.get("ref_high") is not None and r["value"] > r["ref_high"])]
-
-    report_lines = [
-        f"<b>Текст обработан</b>",
-        f"Лаборатория: {lab_name}",
-        f"Дата: {collected_at}",
-        f"Показателей: <b>{count}</b>",
-    ]
-
-    if abnormal:
-        report_lines.append(f"\n<b>Вне нормы ({len(abnormal)}):</b>")
-        for r in abnormal:
-            ref = f"норма: {r.get('ref_low', '?')}–{r.get('ref_high', '?')}"
-            report_lines.append(f"  🔴 {r['biomarker']}: <b>{r['value']}</b> {r['unit']} ({ref})")
-    else:
-        report_lines.append("\nВсе показатели в норме.")
-
-    if warnings:
-        report_lines.append(f"\nПредупреждения:")
-        for w in warnings[:5]:
-            report_lines.append(f"  ⚠️ {w}")
-
-    return "\n".join(report_lines)
+    # Confirmation gate before CH write — same as PDF path.
+    doc_meta = {
+        "lab_name": lab_name, "collected_at": collected_at,
+        "source_file": source_name, "kind": "text",
+        "file_size": len(text), "page_count": 1,
+        "raw_text": text[:10000],
+    }
+    _send_extraction_preview(chat_id, owner_id, valid_rows, warnings, doc_meta)
+    log.info("Text-paste preview sent for confirmation (%d rows, owner=%s)",
+             len(valid_rows), owner_id)
+    return ""
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1968,21 +2187,19 @@ def process_message(message: dict) -> None:
                     for row in valid_rows:
                         row["source_file"] = source_name
                         row["raw_text"] = ocr_text[:10000]
-                    count = insert_lab_results(valid_rows, owner_id)
-                    insert_upload_log(source_name, best.get("file_size", 0), 1, count,
-                                      lab_name, collected_at, "ok", "", ocr_text[:10000], owner_id=owner_id)
-                    abnormal = [r for r in valid_rows
-                                if (r.get("ref_low") is not None and r["value"] < r["ref_low"])
-                                or (r.get("ref_high") is not None and r["value"] > r["ref_high"])]
-                    photo_report = (
-                        f"<b>Фото обработано</b>\n"
-                        f"Лаборатория: {lab_name}\nДата: {collected_at}\n"
-                        f"Показателей: <b>{count}</b>"
-                    )
-                    if abnormal:
-                        photo_report += f"\n\n<b>Вне нормы ({len(abnormal)}):</b>"
-                        for r in abnormal:
-                            photo_report += f"\n  🔴 {r['biomarker']}: <b>{r['value']}</b> {r['unit']}"
+                    # Confirmation gate before CH write — same as PDF path.
+                    doc_meta = {
+                        "lab_name": lab_name, "collected_at": collected_at,
+                        "source_file": source_name, "kind": "photo",
+                        "file_size": best.get("file_size", 0), "page_count": 1,
+                        "raw_text": ocr_text[:10000],
+                    }
+                    _send_extraction_preview(chat_id, owner_id, valid_rows,
+                                             warnings, doc_meta)
+                    log.info("Photo preview sent for confirmation (%d rows, owner=%s)",
+                             len(valid_rows), owner_id)
+                    # Empty photo_report → _finalize_save will no-op.
+                    photo_report = ""
 
             if photo_report is None:
                 # Not lab results or no numeric values — save as document
@@ -2274,6 +2491,14 @@ def main() -> None:
                 message = update.get("message")
                 if message:
                     process_message(message)
+                    continue
+                callback = update.get("callback_query")
+                if callback:
+                    try:
+                        _handle_extraction_callback(callback)
+                    except Exception as exc:
+                        log.error("callback handler failed: %s\n%s",
+                                  exc, traceback.format_exc())
         except KeyboardInterrupt:
             log.info("Shutting down")
             break

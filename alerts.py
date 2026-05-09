@@ -40,6 +40,27 @@ CYCLE_WATCH_BIOMARKERS = [
     "25-OH витамин D",
 ]
 
+# Lab forms use multiple synonyms for the same analyte. Map canonical →
+# extra accepted spellings observed in real lab_results. Canonical itself
+# is always counted; do not duplicate it here.
+BIOMARKER_ALIASES: dict[str, list[str]] = {
+    "АЛТ": ["АЛТ (аланинаминотрансфераза)"],
+    "АСТ": ["АСТ (аспартатаминотрансфераза)"],
+    "ИФР-1": ["Соматомедин С (ИФР-1)", "Соматомедин С"],
+    "Тестостерон общий": ["Тестостерон"],
+    "25-OH витамин D": [
+        "Витамин D",
+        "Витамин D (25-OH)",
+        "Витамин D3 (25-OH)",
+        "Витамин D3 (25-гидроксивитамин D)",
+    ],
+}
+
+
+def _accepted_names(canonical: str) -> list[str]:
+    """Canonical name plus all known aliases."""
+    return [canonical, *BIOMARKER_ALIASES.get(canonical, [])]
+
 # Recommended cadence on a TRT+ГР cycle.
 WARN_WEEKS = 6
 CRITICAL_WEEKS = 10
@@ -92,7 +113,10 @@ def check_lab_fatigue(ch: Any, owner_id: str) -> list[dict]:
 
     alerts: list[dict] = []
     for bm in CYCLE_WATCH_BIOMARKERS:
-        last = last_seen_map.get(bm)
+        last = max(
+            (last_seen_map[name] for name in _accepted_names(bm) if name in last_seen_map),
+            default=None,
+        )
         if last is None:
             alerts.append({
                 "kind": "lab_fatigue",
@@ -148,9 +172,17 @@ def check_trend_reversals(ch: Any, owner_id: str) -> list[dict]:
     owner_id = _validate_owner_id(owner_id)
     series = query_spc_data(owner_id)
 
+    # Reverse map: every accepted name → its canonical, so an alias series
+    # is treated as the watch-list biomarker without merging series across
+    # different lab spellings (units/methods may differ).
+    accepted_to_canonical: dict[str, str] = {}
+    for canonical in CYCLE_WATCH_BIOMARKERS:
+        for name in _accepted_names(canonical):
+            accepted_to_canonical[name] = canonical
+
     alerts: list[dict] = []
     for biomarker, points in series.items():
-        if biomarker not in CYCLE_WATCH_BIOMARKERS:
+        if biomarker not in accepted_to_canonical:
             continue
         if len(points) < 4:
             continue
@@ -158,6 +190,10 @@ def check_trend_reversals(ch: Any, owner_id: str) -> list[dict]:
         result = compute_xmr(biomarker, points)
         if result is None or not result.signals:
             continue
+
+        # Display the canonical watch-list name so /alerts is consistent
+        # with check_lab_fatigue output even when the lab uses a synonym.
+        display_name = accepted_to_canonical[biomarker]
 
         # Pick the most severe signal for this biomarker — one alert per
         # series; the structured signal field tells the user which rule
@@ -201,13 +237,13 @@ def check_trend_reversals(ch: Any, owner_id: str) -> list[dict]:
         rule_phrase = _rule_phrase(rule, direction)
         unit = result.unit or ""
         message = (
-            f"{biomarker}: {rule_phrase}, "
+            f"{display_name}: {rule_phrase}, "
             f"последнее {last_value} {unit} ({last_date_ru})"
         ).strip()
 
         alerts.append({
             "kind": "trend",
-            "biomarker": biomarker,
+            "biomarker": display_name,
             "trend": trend_word,
             "last_value": last_value,
             "last_date": last_date_iso,

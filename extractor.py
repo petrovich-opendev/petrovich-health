@@ -1,12 +1,12 @@
 """LLM-based biomarker extraction from raw PDF text."""
 from __future__ import annotations
 
-import json
 import logging
-import re
+import subprocess
 from datetime import date
 
-from llm_client import LLMError, chat_completion
+from extractor_cache import cache_get, cache_put, hash_text
+from utils import parse_json_response
 
 log = logging.getLogger("health-bot")
 
@@ -81,7 +81,7 @@ EXTRACTION_PROMPT = """Ты — детерминированный парсер 
 
 def classify_document(
     raw_text: str,
-    model: str | None = None,
+    model: str = "claude-opus-4-7",
     timeout: int = 60,
 ) -> dict:
     """
@@ -89,13 +89,18 @@ def classify_document(
     """
     prompt = CLASSIFICATION_PROMPT + raw_text[:8000]
     try:
-        raw = chat_completion(prompt, model=model, max_tokens=2048, timeout=timeout)
-        parsed = _parse_json(raw)
-        if parsed and "doc_class" in parsed:
-            log.info("Classified: doc_class=%s doc_type=%s", parsed["doc_class"], parsed.get("doc_type"))
-            return parsed
-    except LLMError as exc:
-        log.warning("Classification LLM failed: %s", exc)
+        log.info("Classifying document with model=%s (%d chars)", model, len(raw_text))
+        result = subprocess.run(
+            ["claude", "-p", "--model", model, prompt],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        if result.returncode == 0:
+            parsed = parse_json_response(result.stdout.strip())
+            if parsed and "doc_class" in parsed:
+                log.info("Classified: doc_class=%s doc_type=%s", parsed["doc_class"], parsed.get("doc_type"))
+                return parsed
     except Exception as exc:
         log.warning("Classification failed: %s", exc)
 
@@ -105,8 +110,8 @@ def classify_document(
 
 def extract_biomarkers(
     raw_text: str,
-    primary_model: str | None = None,
-    fallback_model: str | None = None,
+    primary_model: str = "claude-opus-4-7",
+    fallback_model: str = "claude-opus-4-7",
     timeout: int = 240,
 ) -> dict:
     """
@@ -114,42 +119,55 @@ def extract_biomarkers(
 
     Returns dict with keys: collected_at, lab_name, results (list of biomarkers).
     """
+    text_hash = hash_text(raw_text)
+    cached = cache_get(text_hash)
+    if cached is not None:
+        log.info(
+            "extract_biomarkers cache hit hash=%s biomarkers=%d",
+            text_hash[:12], len(cached.get("results", [])),
+        )
+        return cached
+
     prompt = EXTRACTION_PROMPT + raw_text[:15000]  # limit to avoid token overflow
 
-    models_to_try = [primary_model] if primary_model == fallback_model else [primary_model, fallback_model]
-    for model in models_to_try:
+    for model in [primary_model, fallback_model]:
         try:
-            raw = chat_completion(prompt, model=model, max_tokens=8000, timeout=timeout)
-            parsed = _parse_json(raw)
+            log.info("Extracting biomarkers with model=%s (text %d chars)", model, len(raw_text))
+            result = subprocess.run(
+                ["claude", "-p", "--model", model, prompt],
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+            if result.returncode != 0:
+                log.warning("claude CLI failed (rc=%d) model=%s: %s",
+                            result.returncode, model, result.stderr.strip()[:200])
+                continue
+
+            parsed = parse_json_response(result.stdout.strip())
             if parsed and "results" in parsed:
                 log.info("Extracted %d biomarkers with %s", len(parsed["results"]), model)
+                cache_put(text_hash, parsed)
+                # Observational self-check: log mismatches but do not block return.
+                try:
+                    from self_check import verify_extraction
+                    v = verify_extraction(raw_text, parsed)
+                    log.info("verify_extraction: verified=%s discrepancies=%d",
+                             v.get("verified"), len(v.get("discrepancies", [])))
+                    for i, d in enumerate(v.get("discrepancies", []) or []):
+                        log.warning("verify_extraction discrepancy[%d] row=%s field=%s extracted=%r source=%r",
+                                    i, d.get("row_index"), d.get("field"),
+                                    d.get("extracted"), d.get("found_in_source"))
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("verify_extraction skipped: %s", exc)
                 return parsed
-            log.warning("Extraction returned no 'results' field, model=%s", model)
-        except LLMError as exc:
-            log.warning("Extraction LLM error model=%s: %s", model, exc)
+
+        except subprocess.TimeoutExpired:
+            log.warning("Extraction timeout model=%s", model)
         except Exception as exc:
             log.warning("Extraction error model=%s: %s", model, exc)
 
     raise RuntimeError("Failed to extract biomarkers from PDF text")
-
-
-def _parse_json(raw: str) -> dict | None:
-    """Extract JSON from LLM response, handling markdown wrappers."""
-    # Try direct parse
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        pass
-
-    # Try finding JSON block
-    match = re.search(r"\{.*\}", raw, re.DOTALL)
-    if match:
-        try:
-            return json.loads(match.group(0))
-        except json.JSONDecodeError:
-            pass
-
-    return None
 
 
 def validate_results(data: dict, fallback_date: date | None = None) -> tuple[list[dict], list[str]]:

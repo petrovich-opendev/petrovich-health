@@ -17,7 +17,7 @@ import hashlib
 import json
 import logging
 import os
-import re
+import subprocess
 import sys
 from datetime import datetime, timezone, timedelta, date
 from pathlib import Path
@@ -27,7 +27,7 @@ import requests
 import yaml
 from dotenv import load_dotenv
 
-from llm_client import LLMError, _default_model, chat_completion
+from utils import parse_json_response
 
 PROJECT_DIR = Path(__file__).resolve().parent
 LOGS_DIR = PROJECT_DIR / "logs"
@@ -61,16 +61,25 @@ def get_ch():
     )
 
 
-def call_llm(prompt: str, model: str | None = None, timeout: int = 240,
-             retries: int = 2, max_tokens: int = 8000) -> str:
-    """Call LLM via OpenRouter. Kept name-stable wrapper around llm_client."""
-    return chat_completion(
-        prompt,
-        model=model or _default_model(),
-        max_tokens=max_tokens,
-        timeout=timeout,
-        retries=retries,
-    )
+def call_claude(prompt: str, model: str = "claude-opus-4-7", timeout: int = 240,
+                retries: int = 2) -> str:
+    """Call Claude via local CLI (privacy-preserving Anthropic commercial terms)."""
+    logging.info("Calling claude model=%s (%d chars)", model, len(prompt))
+    last_exc: Exception | None = None
+    for attempt in range(1, retries + 2):
+        result = subprocess.run(
+            ["claude", "-p", "--model", model, prompt],
+            capture_output=True, text=True, timeout=timeout,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+        detail = result.stderr[:300] or result.stdout[:300] or "(no output)"
+        last_exc = RuntimeError(f"claude failed (rc={result.returncode}): {detail}")
+        if attempt <= retries:
+            logging.warning("claude attempt %d/%d failed: %s — retrying in 30s",
+                            attempt, retries + 1, detail)
+            import time; time.sleep(30)
+    raise last_exc
 
 
 def send_telegram(text: str, chat_id: str | None = None) -> bool:
@@ -161,14 +170,25 @@ def run_digest(log: logging.Logger, owner_id: str = "524605979") -> int:
 {chat_text}"""
 
     try:
-        raw = call_llm(prompt, timeout=240, max_tokens=4000)
-        m = re.search(r"\{.*\}", raw, re.DOTALL)
-        if not m:
+        raw = call_claude(prompt, "claude-opus-4-7", timeout=240)
+        data = parse_json_response(raw)
+        if data is None:
             raise ValueError(f"No JSON: {raw[:200]}")
-        data = json.loads(m.group(0))
     except Exception as exc:
         log.error("Digest LLM failed: %s", exc)
         return 2
+
+    # Observational self-check: log mismatches but do not block return.
+    try:
+        from self_check import verify_digest
+        v = verify_digest(chat_text, data)
+        log.info("verify_digest: verified=%s discrepancies=%d",
+                 v.get("verified"), len(v.get("discrepancies", [])))
+        for i, d in enumerate(v.get("discrepancies", []) or []):
+            log.warning("verify_digest discrepancy[%d] field=%s extracted=%r source=%r",
+                        i, d.get("field"), d.get("extracted"), d.get("found_in_source"))
+    except Exception as exc:
+        log.warning("verify_digest skipped: %s", exc)
 
     ch.insert("daily_digest", [[
         date.fromisoformat(today),
@@ -176,7 +196,7 @@ def run_digest(log: logging.Logger, owner_id: str = "524605979") -> int:
         data.get("topics", []),
         data.get("user_concerns", ""),
         data.get("new_info", ""),
-        _default_model(),
+        "claude-opus-4-7",
         owner_id,
     ]], column_names=["date", "digest", "topics", "user_concerns", "new_info", "model", "owner_id"])
 
@@ -341,15 +361,33 @@ def run_profile(log: logging.Logger, owner_id: str = "524605979") -> int:
 }}"""
 
     try:
-        raw = call_llm(prompt, timeout=300, max_tokens=8000)
-        m = re.search(r"\{.*\}", raw, re.DOTALL)
-        if not m:
+        raw = call_claude(prompt, "claude-opus-4-7", timeout=300)
+        data = parse_json_response(raw)
+        if data is None:
             raise ValueError(f"No JSON: {raw[:300]}")
-        data = json.loads(m.group(0))
     except Exception as exc:
         log.error("Profile LLM failed: %s", exc)
         send_telegram(f"⚠️ <b>Diagnostician failed</b>\n\n{str(exc)[:500]}", owner_id)
         return 2
+
+    # Observational self-check: log mismatches but do not block return.
+    try:
+        from self_check import verify_profile
+        # Assemble the same LAB+DIGEST+SPC source the profile LLM saw.
+        profile_source = (
+            "=== LAB ===\n" + ("\n".join(lab_lines) or "(нет данных)")
+            + "\n\n=== DIGESTS ===\n" + ("\n".join(digest_lines) or "(нет диалогов)")
+            + "\n\n=== SPC ===\n" + (spc_block or "(нет данных)")
+        )
+        v = verify_profile(profile_source, data)
+        log.info("verify_profile: verified=%s discrepancies=%d",
+                 v.get("verified"), len(v.get("discrepancies", [])))
+        for i, d in enumerate(v.get("discrepancies", []) or []):
+            log.warning("verify_profile discrepancy[%d] field=%s idx=%s extracted=%r source=%r",
+                        i, d.get("field"), d.get("index"),
+                        d.get("extracted"), d.get("found_in_source"))
+    except Exception as exc:
+        log.warning("verify_profile skipped: %s", exc)
 
     # Delete old profile for today + owner before inserting new
     ch.command(f"ALTER TABLE health_profile DELETE WHERE date = '{today}' AND owner_id = '{owner_id}'")
@@ -365,7 +403,7 @@ def run_profile(log: logging.Logger, owner_id: str = "524605979") -> int:
         json.dumps(data.get("missing_data", []), ensure_ascii=False),
         json.dumps(data.get("alerts", []), ensure_ascii=False),
         data_hash,
-        _default_model(),
+        "claude-opus-4-7",
         owner_id,
     ]], column_names=[
         "date", "profile_text", "overall_status", "key_findings",

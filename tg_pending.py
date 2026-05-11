@@ -30,7 +30,7 @@ def _handle_pending(chat_id: str, owner_id: str, text: str, user: dict) -> bool:
 
     # ── Feedback ──
     if action == "feedback":
-        del _pending[owner_id]
+        _pending.pop(owner_id, None)
         try:
             resp = requests.post(
                 "https://api.github.com/repos/petrovich-opendev/petrovich-health/issues",
@@ -49,7 +49,8 @@ def _handle_pending(chat_id: str, owner_id: str, text: str, user: dict) -> bool:
                 send_message(chat_id, "✅ Спасибо! Отзыв отправлен.")
             else:
                 send_message(chat_id, "⚠️ Не удалось отправить. Напиши @Petrovoch_mobile")
-        except Exception:
+        except Exception as exc:
+            log.warning("Feedback issue create failed: %s", exc)
             send_message(chat_id, "⚠️ Ошибка. Напиши @Petrovoch_mobile")
         return True
 
@@ -143,7 +144,7 @@ def _handle_pending(chat_id: str, owner_id: str, text: str, user: dict) -> bool:
             return True
 
         d = pending["data"]
-        del _pending[owner_id]
+        _pending.pop(owner_id, None)
 
         bmr = calc_bmr(d["weight"], d["height"], d["age"])
         tdee = calc_tdee(bmr, activity)
@@ -181,7 +182,7 @@ def _handle_pending(chat_id: str, owner_id: str, text: str, user: dict) -> bool:
 
     # ── Weight ──
     if action == "weight":
-        del _pending[owner_id]
+        _pending.pop(owner_id, None)
         cmd_resp = handle_command(f"/weight {text}", owner_id)
         if cmd_resp and not isinstance(cmd_resp, tuple):
             send_message(chat_id, cmd_resp)
@@ -189,7 +190,7 @@ def _handle_pending(chat_id: str, owner_id: str, text: str, user: dict) -> bool:
 
     # ── Search ──
     if action == "search":
-        del _pending[owner_id]
+        _pending.pop(owner_id, None)
         cmd_resp = handle_command(f"/search {text}", owner_id)
         if cmd_resp and not isinstance(cmd_resp, tuple):
             send_message(chat_id, cmd_resp)
@@ -197,7 +198,7 @@ def _handle_pending(chat_id: str, owner_id: str, text: str, user: dict) -> bool:
 
     # ── Trend ──
     if action == "trend":
-        del _pending[owner_id]
+        _pending.pop(owner_id, None)
         cmd_resp = handle_command(f"/trend {text}", owner_id)
         if isinstance(cmd_resp, tuple):
             _handle_rich_command(cmd_resp, chat_id, owner_id, user)
@@ -207,9 +208,9 @@ def _handle_pending(chat_id: str, owner_id: str, text: str, user: dict) -> bool:
 
     # ── Eat ──
     if action == "eat":
-        del _pending[owner_id]
+        _pending.pop(owner_id, None)
         _process_eat(chat_id, owner_id, text)
         return True
 
-    del _pending[owner_id]
+    _pending.pop(owner_id, None)
     return False

@@ -37,9 +37,10 @@ def _prune_pending_extractions() -> None:
         if (now - e.get("ts", now)).total_seconds() > _PENDING_EXTRACTION_TTL_SEC
     ]
     for tok in expired:
-        log.info("Pruning stale pending extraction token=%s owner=%s",
-                 tok, _PENDING_EXTRACTIONS[tok].get("owner_id"))
-        del _PENDING_EXTRACTIONS[tok]
+        entry = _PENDING_EXTRACTIONS.pop(tok, None)
+        if entry is not None:
+            log.info("Pruning stale pending extraction token=%s owner=%s",
+                     tok, entry.get("owner_id"))
 
 
 def _stash_extraction(owner_id: str, rows: list[dict], warnings: list[str],

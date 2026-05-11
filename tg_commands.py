@@ -247,8 +247,9 @@ def handle_command(text: str, owner_id: str = "524605979") -> str | None:
                 owner_id, datetime.now(), w, None, "",
             ]], column_names=["owner_id", "ts", "weight_kg", "body_fat_pct", "notes"])
             recent = ch.query(
-                f"SELECT ts, weight_kg FROM body_log WHERE owner_id = '{owner_id}' "
-                f"ORDER BY ts DESC LIMIT 5"
+                "SELECT ts, weight_kg FROM body_log WHERE owner_id = {o:String} "
+                "ORDER BY ts DESC LIMIT 5",
+                parameters={"o": owner_id},
             )
             if len(recent.result_rows) >= 2:
                 prev = recent.result_rows[1][1]
@@ -588,10 +589,9 @@ def _process_eat(chat_id: str, owner_id: str, food_text: str) -> None:
 ПРИЁМ ПИЩИ: {food_text}"""
 
     try:
-        result = subprocess.run(
-            ["claude", "-p", "--model", "claude-opus-4-7", prompt],
-            capture_output=True, text=True, timeout=90,
-        )
+        from claude_runner import run_claude
+        result = run_claude(prompt, model="claude-opus-4-7",
+                            owner_id=owner_id, timeout=90)
         if result.returncode != 0:
             send_message(chat_id, "Ошибка анализа. Попробуй описать подробнее.")
             return
@@ -647,9 +647,10 @@ def _process_eat(chat_id: str, owner_id: str, food_text: str) -> None:
 
         today = datetime.now(MSK_TZ).strftime("%Y-%m-%d")
         totals = ch.query(
-            f"SELECT sum(calories), sum(protein_g), sum(leucine_g), count() "
-            f"FROM nutrition_log WHERE owner_id = '{owner_id}' "
-            f"AND toDate(ts) = '{today}'"
+            "SELECT sum(calories), sum(protein_g), sum(leucine_g), count() "
+            "FROM nutrition_log WHERE owner_id = {o:String} "
+            "AND toDate(ts) = {d:String}",
+            parameters={"o": owner_id, "d": today},
         )
         if totals.result_rows:
             t = totals.result_rows[0]
@@ -681,7 +682,8 @@ def _show_correlations(chat_id: str, owner_id: str) -> None:
     from db import get_client
     ch = get_client()
     result = ch.query(
-        f"SELECT DISTINCT biomarker FROM lab_results WHERE owner_id = '{owner_id}'"
+        "SELECT DISTINCT biomarker FROM lab_results WHERE owner_id = {o:String}",
+        parameters={"o": owner_id},
     )
     user_markers = {row[0] for row in result.result_rows}
 
@@ -697,10 +699,11 @@ def _show_correlations(chat_id: str, owner_id: str) -> None:
 
         for m in matched:
             latest = ch.query(
-                f"SELECT collected_at, value, unit, ref_low, ref_high, is_abnormal "
-                f"FROM lab_results WHERE owner_id = '{owner_id}' "
-                f"AND biomarker ILIKE '%{m}%' "
-                f"ORDER BY collected_at DESC LIMIT 1"
+                "SELECT collected_at, value, unit, ref_low, ref_high, is_abnormal "
+                "FROM lab_results WHERE owner_id = {o:String} "
+                "AND biomarker ILIKE {n:String} "
+                "ORDER BY collected_at DESC LIMIT 1",
+                parameters={"o": owner_id, "n": f"%{m}%"},
             )
             if latest.result_rows:
                 r = latest.result_rows[0]

@@ -5,6 +5,7 @@ import logging
 import subprocess
 from datetime import datetime, timedelta, timezone
 
+from claude_runner import run_claude
 from db import query_for_llm_context, query_recent_chat
 from tg_context import (
     _build_antagonists_context,
@@ -92,12 +93,8 @@ def ask_llm(question: str, owner_id: str = "524605979") -> str:
     for model in [LLM_PRIMARY, LLM_FALLBACK]:
         try:
             log.info("LLM Q&A model=%s question='%s'", model, question[:80])
-            result = subprocess.run(
-                ["claude", "-p", "--model", model, prompt],
-                capture_output=True,
-                text=True,
-                timeout=LLM_TIMEOUT,
-            )
+            result = run_claude(prompt, model=model, owner_id=owner_id,
+                                timeout=LLM_TIMEOUT)
             if result.returncode != 0:
                 log.warning("claude CLI failed (rc=%d) model=%s", result.returncode, model)
                 continue

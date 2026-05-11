@@ -73,7 +73,10 @@ def setup_logging() -> logging.Logger:
 
 log = setup_logging()
 
-_BIOMARKER_COUNT_RE = None  # lazy-compiled, used by _finalize_save
+import re as _re
+# Pre-compiled at import time — lazy-compile inside _finalize_save was a
+# race between the poll thread and any callback thread on first save.
+_BIOMARKER_COUNT_RE = _re.compile(r"Показателей:\s*<b>(\d+)</b>")
 
 
 def _finalize_save(chat_id: str, owner_id: str, tech_report: str,
@@ -88,12 +91,8 @@ def _finalize_save(chat_id: str, owner_id: str, tech_report: str,
     Rationale: Claude-Desktop-style UX — user drops data and gets analysis in a
     single reply, without the two-step "ok, saved" / "now explain it" dance.
     """
-    global _BIOMARKER_COUNT_RE
     if not tech_report:
         return
-    if _BIOMARKER_COUNT_RE is None:
-        import re as __re
-        _BIOMARKER_COUNT_RE = __re.compile(r"Показателей:\s*<b>(\d+)</b>")
     match = _BIOMARKER_COUNT_RE.search(tech_report)
     bio_count = int(match.group(1)) if match else 0
 
@@ -231,12 +230,12 @@ def process_message(message: dict) -> None:
                 "Сохрани структуру: названия показателей, значения, единицы, нормы. "
                 "Верни ТОЛЬКО чистый текст как есть, без интерпретации и без комментариев."
             )
-            result = subprocess.run(
-                ["claude", "-p", "--model", "claude-opus-4-7",
-                 "--add-dir", str(photo_path.parent),
-                 "--permission-mode", "acceptEdits",
-                 vision_prompt],
-                capture_output=True, text=True, timeout=180,
+            from claude_runner import run_claude
+            result = run_claude(
+                vision_prompt, model="claude-opus-4-7", owner_id=owner_id,
+                timeout=180,
+                extra_args=["--add-dir", str(photo_path.parent),
+                            "--permission-mode", "acceptEdits"],
             )
             if result.returncode != 0:
                 log.error("Photo OCR CLI failed rc=%d stderr=%s", result.returncode, result.stderr[:300])
@@ -321,16 +320,19 @@ def process_message(message: dict) -> None:
     insert_chat_message("user", text, msg_id, owner_id)
 
     # ── Handle pending dialog actions (user replied to a previous question) ──
-    if owner_id in _pending and not text.startswith("/"):
+    # Snapshot the entry so a concurrent pop from another thread can't turn
+    # the membership check into a KeyError on the next access.
+    pending_snapshot = _pending.get(owner_id)
+    if pending_snapshot and not text.startswith("/"):
         # Cancel keywords
         if text.strip().lower() in ("отмена", "отменить", "cancel", "стоп", "нет"):
-            del _pending[owner_id]
+            _pending.pop(owner_id, None)
             send_and_log(chat_id, "❌ Отменено", owner_id)
             return
         # Timeout: pending older than 5 minutes → clear silently
-        pending_ts = _pending[owner_id].get("ts", 0)
+        pending_ts = pending_snapshot.get("ts", 0)
         if time.time() - pending_ts > 300:
-            del _pending[owner_id]
+            _pending.pop(owner_id, None)
             # Fall through to normal processing
         else:
             handled = _handle_pending(chat_id, owner_id, text, user)
@@ -363,8 +365,8 @@ def process_message(message: dict) -> None:
                     "📝 Текст анализов или тренировки\n"
                     "💬 Задать вопрос о здоровье\n\n"
                     "Все данные изолированы — видишь только своё.")
-            except Exception:
-                pass
+            except Exception as exc:
+                log.warning("Failed to notify approved user %s: %s", target_cid, exc)
             _access_requests.pop(target_cid, None)
         else:
             send_message(chat_id, f"Пользователь {target_cid} уже есть или ошибка добавления.")
@@ -511,7 +513,8 @@ def _reminder_loop() -> None:
                 kb = _reminder_keyboard(r["id"], has_drug=bool(drug))
                 try:
                     send_and_log(r["chat_id"], msg, r["owner_id"], reply_markup=kb)
-                    mark_sent(ch, r["id"], deactivate=r.get("is_oneshot", False))
+                    mark_sent(ch, r["id"], r["owner_id"],
+                              deactivate=r.get("is_oneshot", False))
                     log.info("Reminder sent to %s: %s (oneshot=%s, drug=%s)",
                              r["owner_id"], r["text"][:50], r.get("is_oneshot"), drug or "—")
                 except Exception as exc:
@@ -590,6 +593,27 @@ def _sync_bot_menu() -> None:
         log.warning("setMyCommands failed (non-fatal): %s", exc)
 
 
+def _prune_data_dir(max_age_days: int = 30) -> None:
+    """Delete files in data/ older than max_age_days. Best-effort; runs once
+    at startup so a long-running bot doesn't leak disk on uploaded
+    PDFs / photos. Full extracted text already lives in CH; the file
+    on disk is only useful while we're still parsing it."""
+    cutoff = time.time() - max_age_days * 86400
+    pruned = 0
+    try:
+        for f in DATA_DIR.iterdir():
+            if f.is_file() and f.stat().st_mtime < cutoff:
+                try:
+                    f.unlink()
+                    pruned += 1
+                except OSError as exc:
+                    log.warning("Could not delete %s: %s", f.name, exc)
+        if pruned:
+            log.info("Pruned %d stale files from data/ (>%dd old)", pruned, max_age_days)
+    except Exception as exc:
+        log.warning("data/ prune failed (non-fatal): %s", exc)
+
+
 def main() -> None:
     if not TELEGRAM_BOT_TOKEN:
         log.error("TELEGRAM_BOT_TOKEN not set")
@@ -599,6 +623,7 @@ def main() -> None:
     log.info("=== HEALTH-BOT STARTED (users: %s) ===", ", ".join(f"@{u}" for u in users))
 
     _sync_bot_menu()
+    _prune_data_dir()
 
     # Seed global glossary from workout_glossary.yaml (idempotent)
     try:

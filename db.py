@@ -12,7 +12,10 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+import threading as _threading
+
 _client = None
+_client_lock = _threading.Lock()
 
 # Telegram chat_id is always a positive integer (up to ~10^19).
 # This is the ONLY allowed shape for owner_id — nothing else can reach SQL.
@@ -20,19 +23,25 @@ _OWNER_ID_RE = re.compile(r"^-?\d{1,20}$")
 
 
 def get_client() -> clickhouse_connect.driver.Client:
+    """Singleton CH client. Double-checked under a lock so concurrent
+    init from the poll thread + reminder thread can't leak a second
+    socket on first call."""
     global _client
-    if _client is None:
-        _client = clickhouse_connect.get_client(
-            host=os.getenv("CH_HOST", "localhost"),
-            port=int(os.getenv("CH_PORT", "8123")),
-            database=os.getenv("CH_DATABASE", "health_analytics"),
-            username=os.getenv("CH_USER", "default"),
-            password=os.getenv("CH_PASSWORD", ""),
-            # Synchronous insert visibility: user saves data then immediately
-            # asks LLM — the read must see the write. async_insert would hide
-            # the row for ~1 sec, breaking the post-save analysis path.
-            settings={"async_insert": 0, "wait_for_async_insert": 1},
-        )
+    if _client is not None:
+        return _client
+    with _client_lock:
+        if _client is None:
+            _client = clickhouse_connect.get_client(
+                host=os.getenv("CH_HOST", "localhost"),
+                port=int(os.getenv("CH_PORT", "8123")),
+                database=os.getenv("CH_DATABASE", "health_analytics"),
+                username=os.getenv("CH_USER", "default"),
+                password=os.getenv("CH_PASSWORD", ""),
+                # Synchronous insert visibility: user saves data then immediately
+                # asks LLM — the read must see the write. async_insert would hide
+                # the row for ~1 sec, breaking the post-save analysis path.
+                settings={"async_insert": 0, "wait_for_async_insert": 1},
+            )
     return _client
 
 

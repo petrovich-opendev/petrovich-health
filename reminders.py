@@ -29,9 +29,10 @@ DAY_NAMES_REV = {
 def get_reminders(ch, owner_id: str) -> list[dict]:
     """Get all active reminders for user."""
     result = ch.query(
-        f"SELECT id, text, hour, minute, days, active "
-        f"FROM reminders WHERE owner_id = '{owner_id}' AND active = true "
-        f"ORDER BY hour, minute"
+        "SELECT id, text, hour, minute, days, active "
+        "FROM reminders WHERE owner_id = {o:String} AND active = true "
+        "ORDER BY hour, minute",
+        parameters={"o": owner_id},
     )
     return [dict(zip(result.column_names, row)) for row in result.result_rows]
 
@@ -39,9 +40,10 @@ def get_reminders(ch, owner_id: str) -> list[dict]:
 def get_all_reminders(ch, owner_id: str) -> list[dict]:
     """Get all reminders including inactive."""
     result = ch.query(
-        f"SELECT id, text, hour, minute, days, active, created_at "
-        f"FROM reminders WHERE owner_id = '{owner_id}' "
-        f"ORDER BY active DESC, hour, minute"
+        "SELECT id, text, hour, minute, days, active, created_at "
+        "FROM reminders WHERE owner_id = {o:String} "
+        "ORDER BY active DESC, hour, minute",
+        parameters={"o": owner_id},
     )
     return [dict(zip(result.column_names, row)) for row in result.result_rows]
 
@@ -94,10 +96,11 @@ def delete_reminder(ch, owner_id: str, rid_prefix: str) -> str:
     for r in reminders:
         rid = str(r["id"])
         if rid.startswith(rid_prefix) or rid_prefix in rid[:8]:
-            # ReplacingMergeTree — insert with active=false
+            # ALTER UPDATE accepts the same {param:Type} bind syntax as SELECT.
             ch.command(
-                f"ALTER TABLE reminders UPDATE active = false "
-                f"WHERE id = '{rid}' AND owner_id = '{owner_id}'"
+                "ALTER TABLE reminders UPDATE active = false "
+                "WHERE id = {i:UUID} AND owner_id = {o:String}",
+                parameters={"i": rid, "o": owner_id},
             )
             return f"Напоминание удалено: {r['text']} ({r['hour']:02d}:{r['minute']:02d})"
     return f"Напоминание с ID '{rid_prefix}' не найдено."
@@ -127,10 +130,11 @@ def check_due_reminders(ch) -> list[dict]:
     today = now.date()
 
     result = ch.query(
-        f"SELECT id, owner_id, chat_id, text, hour, minute, days, last_sent_at, target_date, "
-        f"drug_name, drug_inn, dose "
-        f"FROM reminders WHERE active = true "
-        f"AND hour = {current_hour} AND minute = {current_minute}"
+        "SELECT id, owner_id, chat_id, text, hour, minute, days, last_sent_at, target_date, "
+        "drug_name, drug_inn, dose "
+        "FROM reminders WHERE active = true "
+        "AND hour = {h:UInt8} AND minute = {m:UInt8}",
+        parameters={"h": current_hour, "m": current_minute},
     )
 
     due = []
@@ -174,17 +178,24 @@ def check_due_reminders(ch) -> list[dict]:
     return due
 
 
-def mark_sent(ch, rid: str, deactivate: bool = False) -> None:
-    """Update last_sent_at after sending. Deactivate one-shot reminders."""
+def mark_sent(ch, rid: str, owner_id: str, deactivate: bool = False) -> None:
+    """Update last_sent_at after sending. Deactivate one-shot reminders.
+
+    ``owner_id`` is required: UUID collisions are astronomically unlikely
+    but the multi-tenant invariant says every mutating SQL filters on
+    the owner. No exceptions.
+    """
     if deactivate:
         ch.command(
-            f"ALTER TABLE reminders UPDATE last_sent_at = now(), active = false "
-            f"WHERE id = '{rid}'"
+            "ALTER TABLE reminders UPDATE last_sent_at = now(), active = false "
+            "WHERE id = {i:UUID} AND owner_id = {o:String}",
+            parameters={"i": rid, "o": owner_id},
         )
     else:
         ch.command(
-            f"ALTER TABLE reminders UPDATE last_sent_at = now() "
-            f"WHERE id = '{rid}'"
+            "ALTER TABLE reminders UPDATE last_sent_at = now() "
+            "WHERE id = {i:UUID} AND owner_id = {o:String}",
+            parameters={"i": rid, "o": owner_id},
         )
 
 

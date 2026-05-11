@@ -102,8 +102,9 @@ def check_lab_fatigue(ch: Any, owner_id: str) -> list[dict]:
     today = date.today()
 
     rows = ch.query(
-        f"SELECT biomarker, max(collected_at) FROM lab_results "
-        f"WHERE owner_id = '{owner_id}' GROUP BY biomarker"
+        "SELECT biomarker, max(collected_at) FROM lab_results "
+        "WHERE owner_id = {o:String} GROUP BY biomarker",
+        parameters={"o": owner_id},
     ).result_rows
     last_seen_map: dict[str, date] = {}
     for biomarker, ts in rows:

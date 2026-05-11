@@ -202,9 +202,9 @@ def run_digest(log: logging.Logger, owner_id: str = "524605979") -> int:
 
     # Get today's chat
     chat = ch.query(
-        f"SELECT ts, role, text FROM chat_log "
-        f"WHERE toDate(ts) = {{d:String}} AND owner_id = '{owner_id}' ORDER BY ts",
-        parameters={"d": today},
+        "SELECT ts, role, text FROM chat_log "
+        "WHERE toDate(ts) = {d:String} AND owner_id = {o:String} ORDER BY ts",
+        parameters={"d": today, "o": owner_id},
     )
     if not chat.result_rows:
         log.info("No chat today — skip")
@@ -314,15 +314,16 @@ def run_profile(log: logging.Logger, owner_id: str = "524605979") -> int:
     log.info("=== L2 PROFILE %s (owner=%s) ===", today, owner_id)
 
     ch = get_ch()
-    own = f"owner_id = '{owner_id}'"
+    p = {"o": owner_id}
 
     # ── Gather ALL data ──
 
     # All lab results
     lab = ch.query(
-        f"SELECT collected_at, category, biomarker, value, unit, "
-        f"ref_low, ref_high, is_abnormal, lab_name "
-        f"FROM lab_results WHERE {own} ORDER BY collected_at, biomarker"
+        "SELECT collected_at, category, biomarker, value, unit, "
+        "ref_low, ref_high, is_abnormal, lab_name "
+        "FROM lab_results WHERE owner_id = {o:String} ORDER BY collected_at, biomarker",
+        parameters=p,
     )
     lab_lines = []
     for r in lab.result_rows:
@@ -334,7 +335,9 @@ def run_profile(log: logging.Logger, owner_id: str = "524605979") -> int:
 
     # All documents
     docs = ch.query(
-        f"SELECT collected_at, doc_type, title, full_text FROM documents WHERE {own} ORDER BY collected_at"
+        "SELECT collected_at, doc_type, title, full_text FROM documents "
+        "WHERE owner_id = {o:String} ORDER BY collected_at",
+        parameters=p,
     )
     doc_lines = []
     for r in docs.result_rows:
@@ -342,8 +345,9 @@ def run_profile(log: logging.Logger, owner_id: str = "524605979") -> int:
 
     # Recent digests (last 14 days)
     digests = ch.query(
-        f"SELECT date, digest, user_concerns, new_info FROM daily_digest "
-        f"WHERE {own} ORDER BY date DESC LIMIT 14"
+        "SELECT date, digest, user_concerns, new_info FROM daily_digest "
+        "WHERE owner_id = {o:String} ORDER BY date DESC LIMIT 14",
+        parameters=p,
     )
     digest_lines = []
     for r in digests.result_rows:
@@ -356,7 +360,9 @@ def run_profile(log: logging.Logger, owner_id: str = "524605979") -> int:
 
     # Previous profile
     prev = ch.query(
-        f"SELECT date, profile_text FROM health_profile WHERE {own} ORDER BY date DESC LIMIT 1"
+        "SELECT date, profile_text FROM health_profile "
+        "WHERE owner_id = {o:String} ORDER BY date DESC LIMIT 1",
+        parameters=p,
     )
     prev_profile = ""
     if prev.result_rows:
@@ -491,7 +497,11 @@ def run_profile(log: logging.Logger, owner_id: str = "524605979") -> int:
         log.warning("verify_profile skipped: %s", exc)
 
     # Delete old profile for today + owner before inserting new
-    ch.command(f"ALTER TABLE health_profile DELETE WHERE date = '{today}' AND owner_id = '{owner_id}'")
+    ch.command(
+        "ALTER TABLE health_profile DELETE "
+        "WHERE date = {d:String} AND owner_id = {o:String}",
+        parameters={"d": today, "o": owner_id},
+    )
 
     # Save to CH
     ch.insert("health_profile", [[

@@ -30,7 +30,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from db import get_client
 from adherence import record_medication_event
 
-DEMO_OWNER = "demo_promomed_patient"
+# Digit-only sentinel — must match _OWNER_ID_RE in db.py or any read path
+# routed through _own() will reject it. "999..." is unmistakably synthetic
+# and won't collide with real Telegram chat_ids (which top out around 10^10).
+DEMO_OWNER = "99999999999"
 
 DRUGS = [
     # (drug_name, drug_inn, dose, expected_pdc, miss_pattern)
@@ -46,7 +49,8 @@ DAYS_BACK = 35  # window with a bit of slack so /adherence 30d gets full coverag
 def seed(ch, dry_run: bool = False) -> None:
     if not dry_run:
         ch.command(
-            f"ALTER TABLE medication_events_v1 DELETE WHERE owner_id = '{DEMO_OWNER}'"
+            "ALTER TABLE medication_events_v1 DELETE WHERE owner_id = {o:String}",
+            parameters={"o": DEMO_OWNER},
         )
 
     rng = random.Random(20260511)

@@ -157,8 +157,8 @@ def _last_test_date(ch: Any, owner_id: str, test_name: str) -> date | None:
     try:
         result = ch.query(
             "SELECT max(collected_at) FROM lab_results "
-            f"WHERE owner_id = '{owner_id}' AND biomarker ILIKE {{n:String}}",
-            parameters={"n": f"%{test_name}%"},
+            "WHERE owner_id = {o:String} AND biomarker ILIKE {n:String}",
+            parameters={"o": owner_id, "n": f"%{test_name}%"},
         )
         if not result.result_rows:
             return None
@@ -195,11 +195,12 @@ def get_current_protocol(ch: Any, owner_id: str) -> dict:
 
     Empty dict shape is returned when there are no digests with new_info.
     """
-    cutoff = (date.today() - timedelta(days=PROTOCOL_LOOKBACK_DAYS)).isoformat()
+    cutoff = date.today() - timedelta(days=PROTOCOL_LOOKBACK_DAYS)
     rows = ch.query(
         "SELECT date, new_info FROM daily_digest "
-        f"WHERE owner_id = '{owner_id}' AND date >= '{cutoff}' "
-        "ORDER BY date DESC"
+        "WHERE owner_id = {o:String} AND date >= {c:Date} "
+        "ORDER BY date DESC",
+        parameters={"o": owner_id, "c": cutoff},
     ).result_rows
 
     has_content = any((r[1] or "").strip() for r in rows)

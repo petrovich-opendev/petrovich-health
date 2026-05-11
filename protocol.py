@@ -72,7 +72,7 @@ def _call_claude(prompt: str, timeout: int = 240) -> str:
 
     for attempt in (1, 2):
         result = subprocess.run(
-            ["claude", "-p", "--model", "claude-opus-4-7", prompt],
+            ["claude", "-p", "--model", "claude-opus-4-7", "--", prompt],
             capture_output=True, text=True, timeout=timeout,
         )
         if result.returncode == 0:

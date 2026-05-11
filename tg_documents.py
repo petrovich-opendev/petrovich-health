@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -14,7 +15,25 @@ PROJECT_DIR = Path(__file__).resolve().parent
 DATA_DIR = PROJECT_DIR / "data"
 MSK_TZ = timezone(timedelta(hours=3))
 
+# Upload size guard: Telegram allows up to 20MB via getFile, but a 19MB PDF can
+# be a "zip bomb" that explodes into GB of text on parse. 5MB easily covers
+# clinical lab PDFs (usually <500KB) and a multi-page scan (~2MB).
+MAX_PDF_SIZE_BYTES = 5 * 1024 * 1024
+
 log = logging.getLogger("health-bot")
+
+# Strict filename sanitiser: keep alphanumerics, Russian letters, dot, dash,
+# underscore — everything else collapses to underscore. .replace("/", "_") (the
+# old version) let backslashes, null bytes, ".." segments, and control chars
+# pass through to disk, logs, and ClickHouse source_file values.
+_SAFE_NAME_RE = re.compile(r"[^A-Za-z0-9._\-А-Яа-яЁё]+")
+
+
+def _safe_filename(file_name: str) -> str:
+    """Strip path components and unsafe chars from a user-supplied filename."""
+    base = Path(file_name).name  # drops any path component the client tried
+    base = _SAFE_NAME_RE.sub("_", base).strip("._") or "upload"
+    return base[:120]  # cap length — long names blow up log lines
 
 
 def _guess_doc_type(file_name: str, text: str) -> str:
@@ -59,13 +78,22 @@ def _save_as_document(
 def process_pdf(file_id: str, file_name: str, chat_id: str, owner_id: str = "524605979") -> str:
     """Full pipeline: download → parse → classify → extract/store → report."""
     timestamp = datetime.now(MSK_TZ).strftime("%Y%m%d_%H%M%S")
-    safe_name = file_name.replace("/", "_").replace(" ", "_")
+    safe_name = _safe_filename(file_name)
     local_path = DATA_DIR / f"{timestamp}_{safe_name}"
 
     log.info("Downloading PDF: %s → %s", file_name, local_path)
     download_file(file_id, local_path)
     file_size = local_path.stat().st_size
     log.info("Downloaded %d bytes", file_size)
+
+    if file_size > MAX_PDF_SIZE_BYTES:
+        local_path.unlink(missing_ok=True)
+        insert_upload_log(safe_name, file_size, 0, 0, "", date.today(), "error",
+                          f"PDF size {file_size} exceeds limit {MAX_PDF_SIZE_BYTES}",
+                          owner_id=owner_id)
+        return (f"Файл слишком большой ({file_size // 1024} КБ). "
+                f"Лимит {MAX_PDF_SIZE_BYTES // 1024 // 1024} МБ — "
+                "для крупных PDF лучше прислать страницы фото.")
 
     try:
         raw_text, page_count = extract_text(local_path)

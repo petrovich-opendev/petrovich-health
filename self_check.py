@@ -76,7 +76,7 @@ def _call_verifier(prompt: str, model: str = "claude-opus-4-7", timeout: int = 2
     try:
         log.info("self_check: calling claude model=%s (%d chars)", model, len(prompt))
         result = subprocess.run(
-            ["claude", "-p", "--model", model, prompt],
+            ["claude", "-p", "--model", model, "--", prompt],
             capture_output=True,
             text=True,
             timeout=timeout,

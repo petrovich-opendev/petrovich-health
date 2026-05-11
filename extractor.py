@@ -91,7 +91,7 @@ def classify_document(
     try:
         log.info("Classifying document with model=%s (%d chars)", model, len(raw_text))
         result = subprocess.run(
-            ["claude", "-p", "--model", model, prompt],
+            ["claude", "-p", "--model", model, "--", prompt],
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -134,7 +134,7 @@ def extract_biomarkers(
         try:
             log.info("Extracting biomarkers with model=%s (text %d chars)", model, len(raw_text))
             result = subprocess.run(
-                ["claude", "-p", "--model", model, prompt],
+                ["claude", "-p", "--model", model, "--", prompt],
                 capture_output=True,
                 text=True,
                 timeout=timeout,

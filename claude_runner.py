@@ -75,7 +75,11 @@ def run_claude(prompt: str, model: str, owner_id: str,
     cmd = ["claude", "-p", "--model", model]
     if extra_args:
         cmd.extend(extra_args)
-    cmd.append(prompt)
+    # `--` ends option parsing — without it, a prompt starting with "-" or
+    # "--flag" gets interpreted as a CLI flag by claude. User-controlled PDF
+    # text reaches here, so this matters even though we use list-form
+    # subprocess.run (no shell). Keep this at the very end of cmd.
+    cmd.extend(["--", prompt])
 
     start = time.time()
     status = "fail"

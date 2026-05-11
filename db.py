@@ -17,9 +17,12 @@ import threading as _threading
 _client = None
 _client_lock = _threading.Lock()
 
-# Telegram chat_id is always a positive integer (up to ~10^19).
-# This is the ONLY allowed shape for owner_id — nothing else can reach SQL.
-_OWNER_ID_RE = re.compile(r"^-?\d{1,20}$")
+# Telegram chat_id for a 1-to-1 user is a positive int64 (≤ 19 digits).
+# We don't serve supergroups, so the leading-minus form is unnecessary —
+# rejecting it removes one whole class of "owner_id looks valid but isn't
+# a real user" edge cases (the synthetic demo seeder uses "999..." too).
+# `^\d{1,19}$` is strict and matches Telegram's actual chat_id shape.
+_OWNER_ID_RE = re.compile(r"^\d{1,19}$")
 
 
 def get_client() -> clickhouse_connect.driver.Client:

@@ -68,7 +68,7 @@ def call_claude(prompt: str, model: str = "claude-opus-4-7", timeout: int = 240,
     last_exc: Exception | None = None
     for attempt in range(1, retries + 2):
         result = subprocess.run(
-            ["claude", "-p", "--model", model, prompt],
+            ["claude", "-p", "--model", model, "--", prompt],
             capture_output=True, text=True, timeout=timeout,
         )
         if result.returncode == 0:

@@ -59,6 +59,14 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 DATA_DIR.mkdir(exist_ok=True)
 LOGS_DIR.mkdir(exist_ok=True)
 
+# Tighten dir/file modes so a host compromise that drops to a non-owner
+# UID can't trivially read uploaded PDFs or PHI in logs. 0o700 = owner-only.
+try:
+    DATA_DIR.chmod(0o700)
+    LOGS_DIR.chmod(0o700)
+except OSError:
+    pass  # readonly fs / unusual host — non-fatal
+
 
 def setup_logging() -> logging.Logger:
     log_file = LOGS_DIR / f"bot-{datetime.now(MSK_TZ).strftime('%Y-%m-%d')}.log"
@@ -142,16 +150,20 @@ def process_message(message: dict) -> None:
     # Security: only authorized users from users.yaml
     user = resolve_user(message)
     if not user:
+        import html as _html
+        from tg_users import _sanitize_name, _sanitize_username
         from_user = message.get("from", {})
-        first_name = from_user.get("first_name", "")
-        last_name = from_user.get("last_name", "")
+        # Sanitise *before* both storage and admin message rendering. Same
+        # value reaches users.yaml later if admin runs /approve, so it must
+        # be safe in every consumer (YAML, HTML rendering, log line).
+        first_name = _sanitize_name(from_user.get("first_name", ""))
+        last_name = _sanitize_name(from_user.get("last_name", ""))
         full_name = f"{first_name} {last_name}".strip() or "Unknown"
-        uname = from_user.get("username", "")
+        uname = _sanitize_username(from_user.get("username", ""))
 
         # Don't spam — one request per user, throttle 10 min
         prev = _access_requests.get(chat_id)
         if prev and time.time() - prev.get("ts", 0) < 600:
-            # Already requested recently — silently ignore
             return
 
         _access_requests[chat_id] = {
@@ -160,18 +172,18 @@ def process_message(message: dict) -> None:
         }
         log.info("Access request from %s (@%s, chat_id=%s)", full_name, uname, chat_id)
 
-        # Notify user
         send_message(chat_id,
             "Привет! Для доступа нужно одобрение администратора.\n"
             "Запрос отправлен. Жди ответа.")
 
-        # Notify all admins
-        uname_str = f" (@{uname})" if uname else ""
+        # Notify all admins. Even after _sanitize_*, we HTML-escape on render
+        # so any future relaxation of the whitelist can't break the markup.
+        uname_str = f" (@{_html.escape(uname)})" if uname else ""
         admin_msg = (
             f"<b>Запрос доступа</b>\n\n"
-            f"Имя: <b>{full_name}</b>{uname_str}\n"
-            f"Chat ID: <code>{chat_id}</code>\n\n"
-            f"Одобрить: <code>/approve {chat_id}</code>\n"
+            f"Имя: <b>{_html.escape(full_name)}</b>{uname_str}\n"
+            f"Chat ID: <code>{_html.escape(str(chat_id))}</code>\n\n"
+            f"Одобрить: <code>/approve {_html.escape(str(chat_id))}</code>\n"
             f"Отклонить — просто проигнорируй."
         )
         for admin_cid in _get_admin_chat_ids():
@@ -231,11 +243,16 @@ def process_message(message: dict) -> None:
                 "Верни ТОЛЬКО чистый текст как есть, без интерпретации и без комментариев."
             )
             from claude_runner import run_claude
+            # `default` permission mode — `acceptEdits` previously gave the model
+            # write access to the photo dir. Combined with prompt-injection from
+            # rendered text inside the photo, that's an unnecessary RCE-adjacent
+            # surface. OCR only needs Read; default mode allows that without
+            # auto-confirming filesystem writes.
             result = run_claude(
                 vision_prompt, model="claude-opus-4-7", owner_id=owner_id,
                 timeout=180,
                 extra_args=["--add-dir", str(photo_path.parent),
-                            "--permission-mode", "acceptEdits"],
+                            "--permission-mode", "default"],
             )
             if result.returncode != 0:
                 log.error("Photo OCR CLI failed rc=%d stderr=%s", result.returncode, result.stderr[:300])
@@ -313,7 +330,10 @@ def process_message(message: dict) -> None:
     if not text:
         return
 
-    log.info("Owner message: '%s'", text[:200])
+    # PHI minimisation: log only length + leading slash command (if any),
+    # NOT the body text. Full text still lives in chat_log (CH, owner-scoped).
+    cmd_head = text.split(maxsplit=1)[0][:32] if text.startswith("/") else "(text)"
+    log.info("Owner message: kind=%s len=%d", cmd_head, len(text))
     msg_id = message.get("message_id", 0)
 
     # L0: save user message to chat log

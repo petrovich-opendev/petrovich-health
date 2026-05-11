@@ -286,7 +286,7 @@ def parse_workout_text(text: str) -> dict | None:
         try:
             log.info("Parsing workout with model=%s (%d chars)", model, len(text))
             result = subprocess.run(
-                ["claude", "-p", "--model", model, prompt],
+                ["claude", "-p", "--model", model, "--", prompt],
                 capture_output=True, text=True, timeout=timeout,
             )
             if result.returncode != 0:

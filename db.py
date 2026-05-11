@@ -63,6 +63,16 @@ def insert_lab_results(rows: list[dict], owner_id: str = "524605979") -> int:
     if not rows:
         return 0
     client = get_client()
+    from dedup import filter_new_lab_results
+    rows, skipped = filter_new_lab_results(client, rows, owner_id)
+    if skipped:
+        # caller already logs aggregate counts; this is the audit trail.
+        import logging
+        logging.getLogger("health-bot").info(
+            "insert_lab_results: skipped %d duplicate biomarker rows", skipped
+        )
+    if not rows:
+        return 0
     columns = [
         "id", "collected_at", "category", "biomarker", "biomarker_original",
         "value", "unit", "ref_low", "ref_high", "is_abnormal",
@@ -93,8 +103,16 @@ def insert_document(
     collected_at: date, doc_type: str, title: str, source_file: str,
     full_text: str, lab_name: str = "", summary: str = "",
     owner_id: str = "524605979",
-) -> None:
+) -> bool:
+    """Insert a document. Returns False if a same-source_file row already exists."""
     client = get_client()
+    from dedup import is_document_duplicate
+    if is_document_duplicate(client, owner_id, source_file):
+        import logging
+        logging.getLogger("health-bot").info(
+            "dedup_skip documents owner=%s source_file=%s", owner_id, source_file
+        )
+        return False
     client.insert("documents", [[
         str(uuid.uuid4()), datetime.now(), collected_at, doc_type, title,
         lab_name, source_file, full_text, summary, owner_id,
@@ -102,14 +120,24 @@ def insert_document(
         "id", "uploaded_at", "collected_at", "doc_type", "title",
         "lab_name", "source_file", "full_text", "summary", "owner_id",
     ])
+    return True
 
 
 def insert_chat_message(role: str, text: str, message_id: int = 0,
-                        owner_id: str = "524605979") -> None:
+                        owner_id: str = "524605979") -> bool:
+    """Insert a chat row. Returns False only for re-insert of same user message_id."""
     client = get_client()
+    from dedup import is_chat_message_duplicate
+    if is_chat_message_duplicate(client, owner_id, role, message_id):
+        import logging
+        logging.getLogger("health-bot").info(
+            "dedup_skip chat_log owner=%s message_id=%s", owner_id, message_id
+        )
+        return False
     client.insert("chat_log", [[
         datetime.now(), role, text, message_id, 0, owner_id,
     ]], column_names=["ts", "role", "text", "message_id", "tokens_used", "owner_id"])
+    return True
 
 
 def insert_upload_log(
@@ -117,8 +145,22 @@ def insert_upload_log(
     lab_name: str, collected_at: date, status: str = "ok",
     error_message: str = "", raw_text: str = "",
     owner_id: str = "524605979",
-) -> None:
+) -> bool:
+    """Log an upload attempt. Returns False if same file+date already ok-logged.
+
+    Failed/partial uploads (status != 'ok') are always inserted — they record
+    a retry attempt, which is useful debugging signal.
+    """
     client = get_client()
+    if status == "ok":
+        from dedup import is_upload_log_duplicate
+        if is_upload_log_duplicate(client, owner_id, source_file, collected_at):
+            import logging
+            logging.getLogger("health-bot").info(
+                "dedup_skip upload_log owner=%s file=%s date=%s",
+                owner_id, source_file, collected_at,
+            )
+            return False
     client.insert("upload_log", [[
         str(uuid.uuid4()), datetime.now(), source_file, file_size, pages,
         biomarkers_extracted, lab_name, collected_at, status,
@@ -128,6 +170,7 @@ def insert_upload_log(
         "biomarkers_extracted", "lab_name", "collected_at", "status",
         "error_message", "raw_text", "owner_id",
     ])
+    return True
 
 
 # ─── Queries (all filtered by owner_id) ─────────────────────────────────────
@@ -485,8 +528,16 @@ def insert_training_entry(
     unknown_terms: list[str] | None = None,
     source: str = "text",
 ) -> str:
-    """Insert a training entry. Returns entry ID."""
+    """Insert a training entry. Returns entry ID, or "" if deduped."""
     client = get_client()
+    from dedup import is_training_entry_duplicate
+    if is_training_entry_duplicate(client, owner_id, workout_date, raw_text):
+        import logging
+        logging.getLogger("health-bot").info(
+            "dedup_skip training_entries owner=%s date=%s text_prefix=%r",
+            owner_id, workout_date, raw_text[:50],
+        )
+        return ""
     entry_id = str(uuid.uuid4())
     client.insert("training_entries", [[
         entry_id, owner_id, datetime.now(), workout_date, entry_type,

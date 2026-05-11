@@ -549,6 +549,47 @@ def _heartbeat_loop() -> None:
         time.sleep(60)
 
 
+# Slash-command menu shown by Telegram when the user taps "/". Kept in
+# sync with /help on startup via setMyCommands — without this the menu
+# is frozen to whatever was last set in BotFather and silently drifts
+# behind newly added commands.
+_BOT_COMMANDS = [
+    {"command": "protocol",     "description": "Текущий стек + взаимодействия + сроки анализов"},
+    {"command": "ddi",          "description": "Взаимодействия препарата (FDA labels)"},
+    {"command": "adherence",    "description": "Приверженность приёму (PDC за 30д)"},
+    {"command": "alerts",       "description": "Алерты: устаревшие анализы, развороты, низкий PDC"},
+    {"command": "last",         "description": "Последние анализы"},
+    {"command": "trend",        "description": "Тренд показателя с графиком"},
+    {"command": "abnormal",     "description": "Показатели вне нормы"},
+    {"command": "spc",          "description": "SPC-анализ (контрольные карты)"},
+    {"command": "search",       "description": "Поиск по анализам и документам"},
+    {"command": "correlations", "description": "Корреляции по системам органов"},
+    {"command": "report",       "description": "PDF-отчёт для врача"},
+    {"command": "summary",      "description": "Общая оценка здоровья"},
+    {"command": "remind",       "description": "Напоминания о препаратах"},
+    {"command": "eat",          "description": "Записать приём пищи"},
+    {"command": "weight",       "description": "Записать вес"},
+    {"command": "goal",         "description": "Установить цель"},
+    {"command": "week",         "description": "Еженедельный ревью"},
+    {"command": "feedback",     "description": "Отзыв или сообщение об ошибке"},
+    {"command": "help",         "description": "Справка"},
+]
+
+
+def _sync_bot_menu() -> None:
+    """Push _BOT_COMMANDS to Telegram so the "/" popup matches /help.
+
+    Non-fatal on failure (network glitch shouldn't stop the bot from
+    serving messages); just logs a warning.
+    """
+    from tg_transport import tg_api
+    try:
+        tg_api("setMyCommands", commands=_BOT_COMMANDS)
+        log.info("Bot menu synced (%d commands)", len(_BOT_COMMANDS))
+    except Exception as exc:
+        log.warning("setMyCommands failed (non-fatal): %s", exc)
+
+
 def main() -> None:
     if not TELEGRAM_BOT_TOKEN:
         log.error("TELEGRAM_BOT_TOKEN not set")
@@ -556,6 +597,8 @@ def main() -> None:
 
     users = load_users()
     log.info("=== HEALTH-BOT STARTED (users: %s) ===", ", ".join(f"@{u}" for u in users))
+
+    _sync_bot_menu()
 
     # Seed global glossary from workout_glossary.yaml (idempotent)
     try:

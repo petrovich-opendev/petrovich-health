@@ -153,14 +153,18 @@ def _handle_pending(chat_id: str, owner_id: str, text: str, user: dict) -> bool:
         from db import get_client
         import uuid as _uuid
         ch = get_client()
+        # created_at has DEFAULT now() in the schema — let CH fill it.
+        # Passing None into a non-nullable DateTime column blows up the
+        # whole goal save flow (see prior incident: user sent "3" to
+        # goal_type, insert raised AttributeError on .timestamp()).
         ch.insert("goals", [[
-            str(_uuid.uuid4()), owner_id, None, True,
+            str(_uuid.uuid4()), owner_id, True,
             d["goal_type"], "", None, None, d["weight"], d["height"], d["age"],
             "male", activity, round(bmr), round(tdee), macros["target_calories"],
             macros["protein_g"], macros["fat_g"], macros["carbs_g"],
             macros["leucine_daily_g"], "[]",
         ]], column_names=[
-            "id", "owner_id", "created_at", "active",
+            "id", "owner_id", "active",
             "goal_type", "description", "target_weight_kg", "target_date",
             "current_weight_kg", "height_cm", "age", "sex", "activity_level",
             "bmr", "tdee", "target_calories",

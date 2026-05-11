@@ -27,7 +27,7 @@ from reminders import (
     parse_natural_reminder, parse_reminder_command,
 )
 from tg_commands import _handle_rich_command, handle_command
-from tg_documents import process_pdf
+from tg_documents import _save_as_document, process_pdf
 from tg_extraction import (
     _handle_extraction_callback,
     _handle_medication_callback,

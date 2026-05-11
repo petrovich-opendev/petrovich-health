@@ -148,7 +148,7 @@ def _commit_pending_extraction(token: str) -> tuple[bool, str]:
     """
     entry = _PENDING_EXTRACTIONS.pop(token, None)
     if entry is None:
-        return False, ("Эта подтверждение уже использовано или истекло "
+        return False, ("Это подтверждение уже использовано или истекло "
                        "(данные не сохранены).")
     rows = entry.get("rows") or []
     owner_id = entry["owner_id"]
@@ -236,7 +236,7 @@ def _handle_extraction_callback(callback: dict) -> None:
 
     if action == "extract_cancel":
         if _PENDING_EXTRACTIONS.pop(token, None) is None:
-            send_and_log(chat_id, "Эта подтверждение уже истекло.", owner_id)
+            send_and_log(chat_id, "Это подтверждение уже истекло.", owner_id)
         else:
             send_and_log(chat_id, "❌ Отменено", owner_id)
         return

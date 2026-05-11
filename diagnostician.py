@@ -512,76 +512,10 @@ def run_profile(log: logging.Logger, owner_id: str = "524605979") -> int:
         "owner_id",
     ])
     log.info("Profile saved: %s", data.get("overall_status", "")[:200])
-
-    # ── Telegram report ──
-    findings = data.get("key_findings", [])
-    watchlist = data.get("watchlist", [])
-    correlations = data.get("correlations", [])
-    missing = data.get("missing_data", [])
-    alerts = data.get("alerts", [])
-
-    msg_parts = [
-        f"🏥 <b>Health Profile — {today}</b>",
-        f"\n<b>Статус:</b> {data.get('overall_status', '—')}",
-    ]
-
-    if alerts:
-        msg_parts.append("\n🚨 <b>ВНИМАНИЕ:</b>")
-        for a in alerts:
-            msg_parts.append(f"  • {a}")
-
-    if findings:
-        msg_parts.append("\n<b>Ключевые находки:</b>")
-        for f in findings[:8]:
-            msg_parts.append(f"  • {f}")
-
-    if watchlist:
-        msg_parts.append("\n<b>Под наблюдением:</b>")
-        for w in watchlist[:6]:
-            if isinstance(w, dict):
-                trend_icon = {"declining": "📉", "rising": "📈", "borderline": "⚠️", "stable": "✅"}.get(w.get("trend", ""), "•")
-                msg_parts.append(f"  {trend_icon} {w.get('biomarker', '?')}: {w.get('last_value', '?')} ({w.get('last_date', '?')}) — {w.get('action', '')}")
-            else:
-                msg_parts.append(f"  • {w}")
-
-    if correlations:
-        msg_parts.append("\n<b>Корреляции:</b>")
-        for c in correlations[:4]:
-            msg_parts.append(f"  🔗 {c}")
-
-    if missing:
-        msg_parts.append("\n<b>Не хватает данных:</b>")
-        for m_item in missing[:5]:
-            msg_parts.append(f"  ❓ {m_item}")
-
-    msg = "\n".join(msg_parts)
-    # Escape stray < > that LLM might produce (breaks HTML parse_mode)
-    import html as _html
-    # Only escape content OUTSIDE our own <b>...</b> tags
-    def _safe_html(text: str) -> str:
-        """Escape HTML but preserve our <b> tags."""
-        parts = []
-        i = 0
-        while i < len(text):
-            if text[i:i+3] in ("<b>", ):
-                end = text.find("</b>", i+3)
-                if end != -1:
-                    parts.append(text[i:end+4])
-                    i = end + 4
-                    continue
-            if text[i] == "<" and not text[i:].startswith(("<b>", "</b>")):
-                parts.append("&lt;")
-            elif text[i] == ">" and (not parts or not parts[-1].endswith(("<b", "</b"))):
-                parts.append("&gt;")
-            else:
-                parts.append(text[i])
-            i += 1
-        return "".join(parts)
-    msg = _safe_html(msg)
-    if send_telegram(msg, owner_id):
-        log.info("Telegram profile report sent (%d chars)", len(msg))
-    else:
-        log.error("Telegram send failed")
+    # The Telegram daily report block used to live here; removed 2026-05-11
+    # at user request — they want the profile written to CH for the bot to
+    # query on demand, but not pushed proactively. Error alerts upstream
+    # (LLM failure → send_telegram in the except branch) are unaffected.
 
     log.info("=== L2 DONE ===")
     return 0

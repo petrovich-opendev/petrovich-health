@@ -49,17 +49,26 @@ def get_all_reminders(ch, owner_id: str) -> list[dict]:
 def add_reminder(ch, owner_id: str, chat_id: str,
                  text: str, hour: int, minute: int,
                  days: list[int] | None = None,
-                 target_date=None) -> str:
-    """Add a new reminder. target_date for one-shot reminders."""
+                 target_date=None,
+                 drug_name: str = "", drug_inn: str = "",
+                 dose: str = "") -> str:
+    """Add a new reminder. target_date for one-shot reminders.
+
+    ``drug_name`` / ``drug_inn`` / ``dose`` are optional. When set, the
+    fired reminder gets inline ✅/⏭️/🤔 buttons that feed PDC adherence.
+    Reminders without drug_name remain generic (e.g., "позвонить врачу").
+    """
     rid = str(uuid.uuid4())
     ch.insert("reminders", [[
         rid, owner_id, chat_id, text,
         hour, minute, days or [], True,
         datetime.now(), None, target_date,
+        drug_inn, dose, drug_name,
     ]], column_names=[
         "id", "owner_id", "chat_id", "text",
         "hour", "minute", "days", "active",
         "created_at", "last_sent_at", "target_date",
+        "drug_inn", "dose", "drug_name",
     ])
 
     if target_date:
@@ -118,14 +127,16 @@ def check_due_reminders(ch) -> list[dict]:
     today = now.date()
 
     result = ch.query(
-        f"SELECT id, owner_id, chat_id, text, hour, minute, days, last_sent_at, target_date "
+        f"SELECT id, owner_id, chat_id, text, hour, minute, days, last_sent_at, target_date, "
+        f"drug_name, drug_inn, dose "
         f"FROM reminders WHERE active = true "
         f"AND hour = {current_hour} AND minute = {current_minute}"
     )
 
     due = []
     for row in result.result_rows:
-        rid, owner_id, chat_id, text, hour, minute, days, last_sent, target_date = row
+        (rid, owner_id, chat_id, text, hour, minute, days, last_sent, target_date,
+         drug_name, drug_inn, dose) = row
 
         # One-shot reminder: check target_date matches today
         if target_date:
@@ -155,6 +166,9 @@ def check_due_reminders(ch) -> list[dict]:
             "chat_id": chat_id,
             "text": text,
             "is_oneshot": target_date is not None,
+            "drug_name": drug_name or "",
+            "drug_inn": drug_inn or "",
+            "dose": dose or "",
         })
 
     return due

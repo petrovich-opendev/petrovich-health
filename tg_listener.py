@@ -317,7 +317,8 @@ _HTML_TAG_RE = None  # lazy-compiled
 _BIOMARKER_COUNT_RE = None  # lazy-compiled
 
 
-def send_and_log(chat_id: str, text: str, owner_id: str) -> None:
+def send_and_log(chat_id: str, text: str, owner_id: str,
+                 reply_markup: dict | None = None) -> None:
     """Send a bot-facing message to Telegram and record it in chat_log.
 
     Guarantees:
@@ -325,6 +326,11 @@ def send_and_log(chat_id: str, text: str, owner_id: str) -> None:
       - retries each chunk as plain text if HTML parse fails (Telegram 400)
       - chat_log is written ONLY if at least one chunk reached the user —
         never fake a delivery
+
+    ``reply_markup`` attaches an inline keyboard to the LAST chunk only
+    (Telegram convention: one keyboard per logical message). Used by
+    reminders to surface ✅ Принял / ⏭️ Пропустил / 🤔 Забыл inline buttons
+    that drive the adherence pipeline.
     """
     if not text:
         return
@@ -336,20 +342,27 @@ def send_and_log(chat_id: str, text: str, owner_id: str) -> None:
     sent_any = False
     sent_all = True
     first_message_id = 0
-    for chunk in chunks:
+    for i, chunk in enumerate(chunks):
         delivered = False
+        is_last = i == len(chunks) - 1
+        params = {"chat_id": chat_id, "text": chunk,
+                  "parse_mode": "HTML", "disable_web_page_preview": True}
+        if reply_markup is not None and is_last:
+            params["reply_markup"] = reply_markup
         try:
-            resp = tg_api("sendMessage", chat_id=chat_id, text=chunk,
-                          parse_mode="HTML", disable_web_page_preview=True)
+            resp = tg_api("sendMessage", **params)
             if not first_message_id:
                 first_message_id = int(resp.get("result", {}).get("message_id") or 0)
             delivered = True
         except Exception as exc:
             log.warning("sendMessage HTML failed (%s) — retrying plain", exc)
             plain = _HTML_TAG_RE.sub("", chunk)
+            params_plain = {"chat_id": chat_id, "text": plain,
+                            "disable_web_page_preview": True}
+            if reply_markup is not None and is_last:
+                params_plain["reply_markup"] = reply_markup
             try:
-                resp = tg_api("sendMessage", chat_id=chat_id, text=plain,
-                              disable_web_page_preview=True)
+                resp = tg_api("sendMessage", **params_plain)
                 if not first_message_id:
                     first_message_id = int(resp.get("result", {}).get("message_id") or 0)
                 delivered = True
@@ -815,6 +828,89 @@ def _handle_extraction_callback(callback: dict) -> None:
     log.warning("Unknown callback action: %s", action)
 
 
+def _handle_medication_callback(callback: dict) -> None:
+    """Route ``med_<status>:<reminder_uuid>`` callbacks from reminder buttons.
+
+    Inserts a medication_events_v1 row mapped to the reminder's drug/dose
+    so the /adherence PDC pipeline can score the take. The button itself
+    is then cleared (editMessageReplyMarkup with empty markup) — without
+    this the user could double-tap and over-count taken events.
+    """
+    from db import get_client
+    from adherence import record_medication_event
+
+    cb_id = callback.get("id", "")
+    data = callback.get("data", "") or ""
+    msg = callback.get("message") or {}
+    chat_id = str(msg.get("chat", {}).get("id", ""))
+    msg_id = msg.get("message_id")
+    if not chat_id:
+        return
+
+    try:
+        tg_api("answerCallbackQuery", callback_query_id=cb_id)
+    except Exception as exc:
+        log.warning("answerCallbackQuery failed: %s", exc)
+
+    user = resolve_user({
+        "from": callback.get("from", {}),
+        "chat": msg.get("chat", {}),
+    })
+    if not user:
+        send_message(chat_id, "Доступ запрещён.")
+        return
+    owner_id = user["owner_id"]
+
+    if ":" not in data:
+        return
+    action, _, reminder_id = data.partition(":")
+    status_map = {
+        "med_taken":   ("taken",   "✅ Записано: принял"),
+        "med_skipped": ("skipped", "⏭️ Записано: пропустил"),
+        "med_forgot":  ("forgot",  "🤔 Записано: забыл"),
+    }
+    if action not in status_map:
+        log.warning("Unknown med callback action: %s", action)
+        return
+    status, ack = status_map[action]
+
+    # Pull drug metadata from the reminder so the event carries names+dose.
+    ch = get_client()
+    rows = ch.query(
+        "SELECT drug_name, drug_inn, dose, text FROM reminders WHERE id={i:UUID} "
+        "AND owner_id={o:String} LIMIT 1",
+        parameters={"i": reminder_id, "o": owner_id},
+    ).result_rows
+    if not rows:
+        log.warning("med callback: reminder %s not found for owner %s",
+                    reminder_id[:8], owner_id)
+        send_and_log(chat_id, "Не нашёл это напоминание.", owner_id)
+        return
+    drug_name, drug_inn, dose, _ = rows[0]
+    if not drug_name:
+        send_and_log(chat_id, "У этого напоминания нет препарата.", owner_id)
+        return
+
+    try:
+        record_medication_event(
+            ch, owner_id, drug_name, drug_inn, dose,
+            status=status, source="reminder_button", reminder_id=reminder_id,
+        )
+    except Exception as exc:
+        log.error("record_medication_event failed: %s", exc)
+        send_and_log(chat_id, f"Не смог записать: {exc}", owner_id)
+        return
+
+    # Strip the keyboard so the user can't re-tap the same reminder.
+    if msg_id:
+        try:
+            tg_api("editMessageReplyMarkup", chat_id=chat_id,
+                   message_id=msg_id, reply_markup={"inline_keyboard": []})
+        except Exception as exc:
+            log.warning("editMessageReplyMarkup failed: %s", exc)
+    send_and_log(chat_id, ack, owner_id)
+
+
 def _process_lab_results(raw_text: str, safe_name: str, file_name: str,
                          file_size: int, page_count: int,
                          lab_name: str, collected_at: date, chat_id: str,
@@ -1077,6 +1173,7 @@ def handle_command(text: str, owner_id: str = "524605979") -> str | None:
             "/spc — SPC-анализ (контрольные карты биомаркеров)\n"
             "/alerts — проактивные алерты (давность анализов, тренды)\n"
             "/protocol — текущий стек и сроки follow-up анализов\n"
+            "/adherence — приверженность приёму (PDC за 30д, целевой ≥80%)\n"
             "/correlations — корреляции по системам органов\n"
             "/remind — напоминания о приёме препаратов\n"
             "/report — PDF-отчёт для врача\n"
@@ -1269,9 +1366,14 @@ def handle_command(text: str, owner_id: str = "524605979") -> str | None:
     if cmd_name == "/alerts":
         from db import get_client
         from alerts import check_lab_fatigue, check_trend_reversals, format_alerts
+        from adherence import adherence_alerts
         ch = get_client()
         items = check_lab_fatigue(ch, owner_id) + check_trend_reversals(ch, owner_id)
-        return format_alerts(items)
+        rendered = format_alerts(items)
+        adh = adherence_alerts(ch, owner_id)
+        if adh:
+            rendered = rendered + "\n\n" + "\n".join(adh)
+        return rendered
 
     if cmd_name == "/protocol":
         from db import get_client
@@ -1283,6 +1385,37 @@ def handle_command(text: str, owner_id: str = "524605979") -> str | None:
             log.error("/protocol failed: %s", exc)
             return f"⚠️ Не удалось собрать протокол: {exc}"
         return _format_protocol(data)
+
+    if cmd_name == "/adherence":
+        from db import get_client
+        from adherence import adherence_summary, PDC_WINDOWS_DAYS
+        ch = get_client()
+        # Argument: optional drug name to filter. Default = 30-day window
+        # for all drugs.
+        window = 30
+        try:
+            data = adherence_summary(ch, owner_id, window_days=window)
+        except Exception as exc:
+            log.error("/adherence failed: %s", exc)
+            return f"⚠️ Не удалось посчитать приверженность: {exc}"
+        drugs = data["drugs"]
+        if not drugs:
+            return ("Нет данных о приёме препаратов за последние 30 дней.\n\n"
+                    "Создай напоминание с препаратом — отмечай ✅/⏭️/🤔 на каждом, "
+                    "и /adherence начнёт показывать PDC.")
+        lines = [f"<b>Приверженность (PDC за {window}д)</b>",
+                 f"<i>Целевой PDC ≥ 80% (industry standard)</i>\n"]
+        for p in drugs:
+            lines.append(str(p))
+            if p.miss_reasons:
+                top = sorted(p.miss_reasons.items(), key=lambda kv: -kv[1])[:3]
+                reasons = ", ".join(f"{k}:{v}" for k, v in top)
+                lines.append(f"     причины пропусков: {reasons}")
+        below = data["below_threshold"]
+        if below:
+            lines.append("")
+            lines.append(f"<b>⚠️ Ниже целевого:</b> {', '.join(p.drug_name for p in below)}")
+        return "\n".join(lines)
 
     if cmd_name == "/docs":
         docs = query_all_documents(owner_id=owner_id)
@@ -2399,6 +2532,24 @@ def process_message(message: dict) -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 # Main loop
 # ─────────────────────────────────────────────────────────────────────────────
+def _reminder_keyboard(reminder_id: str, has_drug: bool) -> dict | None:
+    """Build inline ✅/⏭️/🤔 keyboard for a medication reminder.
+
+    Only attaches when the reminder was registered with a drug_name — for
+    a generic "позвонить врачу" reminder we don't need adherence buttons.
+    The callback_data fits Telegram's 64-byte limit: short prefix + UUID.
+    """
+    if not has_drug:
+        return None
+    return {
+        "inline_keyboard": [[
+            {"text": "✅ Принял",   "callback_data": f"med_taken:{reminder_id}"},
+            {"text": "⏭️ Пропустил", "callback_data": f"med_skipped:{reminder_id}"},
+            {"text": "🤔 Забыл",    "callback_data": f"med_forgot:{reminder_id}"},
+        ]],
+    }
+
+
 def _reminder_loop() -> None:
     """Background thread: check and send due reminders every 60 seconds."""
     import threading
@@ -2409,12 +2560,21 @@ def _reminder_loop() -> None:
             due = check_due_reminders(ch)
             for r in due:
                 now_msk = datetime.now(MSK_TZ).strftime("%H:%M")
-                msg = f"💊 <b>Напоминание</b> ({now_msk})\n\n{r['text']}"
+                drug = (r.get("drug_name") or "").strip()
+                dose = (r.get("dose") or "").strip()
+                if drug:
+                    headline = f"💊 <b>Напоминание</b> ({now_msk}) — {drug}"
+                    if dose:
+                        headline += f" {dose}"
+                    msg = f"{headline}\n\n{r['text']}"
+                else:
+                    msg = f"💊 <b>Напоминание</b> ({now_msk})\n\n{r['text']}"
+                kb = _reminder_keyboard(r["id"], has_drug=bool(drug))
                 try:
-                    send_and_log(r["chat_id"], msg, r["owner_id"])
+                    send_and_log(r["chat_id"], msg, r["owner_id"], reply_markup=kb)
                     mark_sent(ch, r["id"], deactivate=r.get("is_oneshot", False))
-                    log.info("Reminder sent to %s: %s (oneshot=%s)",
-                             r["owner_id"], r["text"][:50], r.get("is_oneshot"))
+                    log.info("Reminder sent to %s: %s (oneshot=%s, drug=%s)",
+                             r["owner_id"], r["text"][:50], r.get("is_oneshot"), drug or "—")
                 except Exception as exc:
                     log.error("Failed to send reminder %s: %s", r["id"][:8], exc)
         except Exception as exc:
@@ -2504,7 +2664,11 @@ def main() -> None:
                 callback = update.get("callback_query")
                 if callback:
                     try:
-                        _handle_extraction_callback(callback)
+                        cb_data = (callback.get("data") or "")
+                        if cb_data.startswith("med_"):
+                            _handle_medication_callback(callback)
+                        else:
+                            _handle_extraction_callback(callback)
                     except Exception as exc:
                         log.error("callback handler failed: %s\n%s",
                                   exc, traceback.format_exc())

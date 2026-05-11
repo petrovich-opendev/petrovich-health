@@ -1147,6 +1147,28 @@ def _format_protocol(data: dict) -> str:
                 line += f" ({rationale})"
             lines.append(line)
 
+    # DDI scan between active stack drugs. Surfaces here (not as a separate
+    # command) so the user gets the safety check at the moment they look at
+    # the stack — no extra command to remember. Skipped silently when there
+    # are no known interactions for the stack — DDI table is curated, an
+    # absent pair means "not in our DB", not "safe".
+    if stack:
+        try:
+            from db import get_client
+            from ddi import check_stack
+            substances = [item.get("substance", "") for item in stack]
+            hits = check_stack(get_client(), substances)
+            if hits:
+                lines.append("\n<b>⚡ Взаимодействия в стеке:</b>")
+                for a, ix in hits:
+                    icon = {"major": "🚨", "moderate": "⚠️"}.get(ix.severity, "ℹ️")
+                    lines.append(
+                        f"  {icon} <b>{a}</b> ↔ <b>{ix.drug_b_inn}</b> "
+                        f"[{ix.severity}]\n     {ix.recommendation[:140]}"
+                    )
+        except Exception as exc:
+            log.warning("DDI stack scan failed (non-fatal): %s", exc)
+
     return "\n".join(lines)
 
 
@@ -1174,6 +1196,7 @@ def handle_command(text: str, owner_id: str = "524605979") -> str | None:
             "/alerts — проактивные алерты (давность анализов, тренды)\n"
             "/protocol — текущий стек и сроки follow-up анализов\n"
             "/adherence — приверженность приёму (PDC за 30д, целевой ≥80%)\n"
+            "/ddi &lt;препарат&gt; — взаимодействия лекарств (DDI)\n"
             "/correlations — корреляции по системам органов\n"
             "/remind — напоминания о приёме препаратов\n"
             "/report — PDF-отчёт для врача\n"
@@ -1385,6 +1408,29 @@ def handle_command(text: str, owner_id: str = "524605979") -> str | None:
             log.error("/protocol failed: %s", exc)
             return f"⚠️ Не удалось собрать протокол: {exc}"
         return _format_protocol(data)
+
+    if cmd_name == "/ddi":
+        from db import get_client
+        from ddi import normalise_drug, check_interactions
+        if len(parts) < 2:
+            return ("Использование: /ddi &lt;препарат&gt;\n"
+                    "Пример: /ddi Тирзетта  или  /ddi апалутамид\n\n"
+                    "Покажу все известные взаимодействия препарата по курированной базе "
+                    "(FDA labels / клинические рекомендации).")
+        raw = " ".join(parts[1:])
+        inn = normalise_drug(raw)
+        ch = get_client()
+        ix = check_interactions(ch, inn)
+        if not ix:
+            return (f"Для <b>{raw}</b> (МНН: <code>{inn}</code>) известных взаимодействий "
+                    f"в базе нет.\n\n<i>База — курированный список ~25 топ-пар по FDA labels; "
+                    f"для полного покрытия нужна DDInter/DrugBank лицензия.</i>")
+        lines = [f"<b>Взаимодействия — {raw}</b>",
+                 f"<i>МНН: {inn} · найдено {len(ix)} известных партнёров</i>\n"]
+        for item in ix:
+            lines.append(item.render())
+            lines.append("")
+        return "\n".join(lines).rstrip()
 
     if cmd_name == "/adherence":
         from db import get_client

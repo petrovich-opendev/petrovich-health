@@ -116,6 +116,82 @@ def send_telegram(text: str, chat_id: str | None = None) -> bool:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Rolling-window standing protocol scan
+# ─────────────────────────────────────────────────────────────────────────────
+STANDING_PROTOCOL_LOOKBACK_DAYS = 14
+
+_STANDING_PROMPT_TEMPLATE = """Ты анализируешь сообщения пользователя за окно __DAYS__ дней и определяешь, какие препараты он СЕЙЧАС ПРИНИМАЕТ (стоит в текущем стеке).
+
+ОКНО: только сообщения с ролью user (то, что писал сам пользователь). Бот-ответы игнорируй полностью — там много упоминаний препаратов в обсуждениях, но это не факт приёма.
+
+ВКЛЮЧАЙ в стек если пользователь сам пишет:
+- «принимаю / на / ставлю / колю / пью / продолжаю / на курсе / держу»
+- «доза / по N мг / N мл / N МЕ / N мкг»
+- «начал / стартанул / поставил укол» — это start
+ИСКЛЮЧАЙ если пользователь пишет:
+- «закончил / прекратил / слетел / снял / отменил / больше не принимаю» — это stop
+- «думаю начать / собираюсь / планирую / рассматриваю / хотел бы» — это план, НЕ факт
+- «не сейчас / потом / временно отложил» — это отказ
+
+ВЕЩЕСТВА (распознавай как класс препаратов):
+- ААС/SARM: ТЗТ, тестостерон энантат/ципионат/пропионат, нандролон, болденон, оксандролон, станозолол, метандростенолон, тренболон, мастерон, остарин, лигандрол, RAD-140
+- ГР и GHS: ГР, соматропин, ипаморелин, CJC-1295, MK-677, гексарелин
+- AI/SERM: анастрозол, экземестан, летрозол, тамоксифен, кломифен
+- Пептиды: BPC-157, TB-500, HCG
+
+ВЫХОД: ОДНА строка, не markdown, не JSON. Формат:
+  «принимает X доза Y режим; принимает Z доза W режим»
+Если стек пуст — выведи строго: «(стек пуст)».
+Сохраняй РУССКИЕ названия и единицы как у пользователя. Дозы строкой, как написано.
+
+=== USER-СООБЩЕНИЯ ЗА ОКНО ===
+__MESSAGES__
+"""
+
+
+def scan_standing_protocol(ch, owner_id: str,
+                           lookback_days: int = STANDING_PROTOCOL_LOOKBACK_DAYS) -> str:
+    """Look at user-role chat over the window and return a one-line summary
+    of substances the user states he is currently taking.
+
+    Output is appended to today's daily_digest.new_info under a [ROLLING_Nd]
+    marker so /protocol can pick it up even when "today" had no fresh
+    protocol mention. Returns "" when the model says the stack is empty or
+    when the window contains no user messages.
+    """
+    cutoff = datetime.now(MSK_TZ) - timedelta(days=lookback_days)
+    rows = ch.query(
+        "SELECT ts, text FROM chat_log "
+        "WHERE owner_id={o:String} AND role='user' AND ts >= {c:DateTime} "
+        "ORDER BY ts",
+        parameters={"o": owner_id, "c": cutoff.strftime("%Y-%m-%d %H:%M:%S")},
+    ).result_rows
+    if not rows:
+        return ""
+
+    msg_block = "\n".join(
+        f"[{r[0].strftime('%Y-%m-%d %H:%M')}] {r[1][:500]}" for r in rows
+    )
+    prompt = (
+        _STANDING_PROMPT_TEMPLATE
+        .replace("__DAYS__", str(lookback_days))
+        .replace("__MESSAGES__", msg_block)
+    )
+
+    try:
+        out = call_claude(prompt, "claude-opus-4-7", timeout=180).strip()
+    except Exception as exc:
+        logging.warning("scan_standing_protocol LLM failed: %s", exc)
+        return ""
+
+    # Normalise: collapse to a single line and strip the "empty" sentinel.
+    out = " ".join(out.split())
+    if not out or out == "(стек пуст)":
+        return ""
+    return out
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # L1: Daily Digest
 # ─────────────────────────────────────────────────────────────────────────────
 def run_digest(log: logging.Logger, owner_id: str = "524605979") -> int:
@@ -199,6 +275,21 @@ def run_digest(log: logging.Logger, owner_id: str = "524605979") -> int:
                         i, d.get("field"), d.get("extracted"), d.get("found_in_source"))
     except Exception as exc:
         log.warning("verify_digest skipped: %s", exc)
+
+    # Rolling-window standing-protocol scan: today's digest can miss a stack
+    # that the user mentioned a few days ago and is still on. Append the
+    # roll-up under a [ROLLING_Nd] marker so /protocol's reader picks it up
+    # without confusing it with today's actual new mentions.
+    try:
+        scan = scan_standing_protocol(ch, owner_id,
+                                       lookback_days=STANDING_PROTOCOL_LOOKBACK_DAYS)
+        if scan:
+            existing = (data.get("new_info") or "").rstrip()
+            marker = f"[ROLLING_{STANDING_PROTOCOL_LOOKBACK_DAYS}d] {scan}"
+            data["new_info"] = f"{existing}\n{marker}" if existing else marker
+            log.info("scan_standing_protocol: %s", scan[:200])
+    except Exception as exc:
+        log.warning("scan_standing_protocol skipped: %s", exc)
 
     ch.insert("daily_digest", [[
         date.fromisoformat(today),

@@ -335,18 +335,23 @@ def send_and_log(chat_id: str, text: str, owner_id: str) -> None:
     chunks = split_message(text)
     sent_any = False
     sent_all = True
+    first_message_id = 0
     for chunk in chunks:
         delivered = False
         try:
-            tg_api("sendMessage", chat_id=chat_id, text=chunk,
-                   parse_mode="HTML", disable_web_page_preview=True)
+            resp = tg_api("sendMessage", chat_id=chat_id, text=chunk,
+                          parse_mode="HTML", disable_web_page_preview=True)
+            if not first_message_id:
+                first_message_id = int(resp.get("result", {}).get("message_id") or 0)
             delivered = True
         except Exception as exc:
             log.warning("sendMessage HTML failed (%s) — retrying plain", exc)
             plain = _HTML_TAG_RE.sub("", chunk)
             try:
-                tg_api("sendMessage", chat_id=chat_id, text=plain,
-                       disable_web_page_preview=True)
+                resp = tg_api("sendMessage", chat_id=chat_id, text=plain,
+                              disable_web_page_preview=True)
+                if not first_message_id:
+                    first_message_id = int(resp.get("result", {}).get("message_id") or 0)
                 delivered = True
             except Exception as exc2:
                 log.error("sendMessage plain failed: %s", exc2)
@@ -360,7 +365,11 @@ def send_and_log(chat_id: str, text: str, owner_id: str) -> None:
         return
     logged_text = text if sent_all else (text + "\n[partial delivery]")
     try:
-        insert_chat_message("bot", logged_text[:10000], owner_id=owner_id)
+        # first_message_id anchors the bot reply to its actual Telegram id —
+        # makes (owner_id, message_id) a real key for bot rows too, and lets
+        # dedup catch a retransmit of the same reply.
+        insert_chat_message("bot", logged_text[:10000],
+                            message_id=first_message_id, owner_id=owner_id)
     except Exception as exc:
         log.error("chat_log insert failed: %s", exc)
 

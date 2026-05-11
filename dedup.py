@@ -105,18 +105,20 @@ def is_upload_log_duplicate(ch, owner_id: str, source_file: str,
 
 def is_chat_message_duplicate(ch, owner_id: str, role: str,
                               message_id: int) -> bool:
-    """True only for user-role messages with a real Telegram message_id.
+    """True if a chat row with the same (role, message_id) already exists.
 
-    Bot replies are not deduped here — they share message_id=0 and the
-    bot may legitimately send the same canned reply twice (e.g., two
-    distinct user prompts both returning "Извини, не понял").
+    Telegram message_id is unique per chat for both user-sent and
+    bot-sent messages, so once the bot captures and stores it (post
+    2026-05-11 fix), the key works for both roles. Legacy bot rows
+    with message_id=0 — and any pre-capture call site that still
+    passes 0 — bypass dedup (zero is the "no real id" sentinel).
     """
-    if role != "user" or not message_id:
+    if not message_id:
         return False
     r = ch.query(
         "SELECT count() FROM chat_log WHERE owner_id={o:String} "
-        "AND role='user' AND message_id={m:UInt64}",
-        parameters={"o": owner_id, "m": int(message_id)},
+        "AND role={r:String} AND message_id={m:UInt64}",
+        parameters={"o": owner_id, "r": role, "m": int(message_id)},
     ).result_rows[0][0]
     return r > 0
 

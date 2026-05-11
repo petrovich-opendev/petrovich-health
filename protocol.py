@@ -2,9 +2,9 @@
 
 The user logs his TRT/GH/peptide cycle through chat — the daily digest LLM
 extracts those mentions into ``daily_digest.new_info``. This module asks
-Opus to roll up the last 30 digests into a *current* stack (not a history)
-and then computes follow-up lab dates from a hardcoded mapping that is
-cross-checked against ``protocols.yaml``.
+Opus to roll up the last ``PROTOCOL_LOOKBACK_DAYS`` of digests into a
+*current* stack (not a history) and then computes follow-up lab dates from
+a hardcoded mapping that is cross-checked against ``protocols.yaml``.
 
 The single heavy LLM call (~30s on Opus) lives in ``get_current_protocol``;
 ``protocols.yaml`` is reference data only — the source of truth is what the
@@ -27,6 +27,13 @@ log = logging.getLogger("health-bot")
 
 PROJECT_DIR = Path(__file__).resolve().parent
 PROTOCOLS_YAML = PROJECT_DIR / "protocols.yaml"
+
+# How far back to look for protocol mentions. 30d (the original window) was
+# too narrow: a TRT/GH cycle started >30d ago but still active gets dropped,
+# and /alerts then can't anchor due-dates to it. 90d covers typical AAS
+# cycle length while still letting "закончил X" mentions push the substance
+# out of current_stack via the prompt rules.
+PROTOCOL_LOOKBACK_DAYS = 90
 
 # Follow-up rules: which substance class triggers which lab, after how many
 # weeks. The LLM gets these as instructions in the prompt; we recompute
@@ -109,7 +116,7 @@ FOLLOW-UP АНАЛИЗЫ — заполни due_dates по этим правил
 
 Если стек пуст — current_stack=[], due_dates=[], raw_extractions=[].
 
-=== ДНЕВНЫЕ ДАЙДЖЕСТЫ (последние 30, по убыванию даты) ===
+=== ДНЕВНЫЕ ДАЙДЖЕСТЫ (последние __LOOKBACK__ дней, по убыванию даты) ===
 __DIGESTS__
 
 === СПРАВОЧНИК ВЕЩЕСТВ (имена для классификации, дозы НЕ читать как факт) ===
@@ -188,9 +195,11 @@ def get_current_protocol(ch: Any, owner_id: str) -> dict:
 
     Empty dict shape is returned when there are no digests with new_info.
     """
+    cutoff = (date.today() - timedelta(days=PROTOCOL_LOOKBACK_DAYS)).isoformat()
     rows = ch.query(
         "SELECT date, new_info FROM daily_digest "
-        f"WHERE owner_id = '{owner_id}' ORDER BY date DESC LIMIT 30"
+        f"WHERE owner_id = '{owner_id}' AND date >= '{cutoff}' "
+        "ORDER BY date DESC"
     ).result_rows
 
     has_content = any((r[1] or "").strip() for r in rows)
@@ -204,6 +213,7 @@ def get_current_protocol(ch: Any, owner_id: str) -> dict:
         _PROMPT_TEMPLATE
         .replace("__DIGESTS__", digests_block)
         .replace("__CATALOGUE__", catalogue_block)
+        .replace("__LOOKBACK__", str(PROTOCOL_LOOKBACK_DAYS))
     )
 
     raw = _call_claude(prompt)

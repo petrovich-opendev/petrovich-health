@@ -5,3 +5,6 @@ pdfplumber>=0.11
 clickhouse-connect>=0.7
 matplotlib>=3.8
 reportlab>=4.0
+# Security floors — pinned to first version that closes known CVEs
+# (CVE-2026-44431, CVE-2026-44432 in urllib3 <2.7.0).
+urllib3>=2.7.0

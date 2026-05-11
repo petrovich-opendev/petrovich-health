@@ -81,6 +81,23 @@ def setup_logging() -> logging.Logger:
 
 log = setup_logging()
 
+# DoS guard: per-(owner, day) message counter, evaluated BEFORE insert.
+# 500/day is far above legitimate use (heavy day = ~50 messages) but cheap
+# to enforce. Resets implicitly because the key includes the date string.
+_DAILY_MSG_LIMIT = 500
+_msg_counts: dict[tuple[str, str], int] = {}
+
+
+def _check_daily_msg_quota(owner_id: str) -> bool:
+    """Return True if owner is still under their daily message cap."""
+    key = (owner_id, datetime.now(MSK_TZ).strftime("%Y-%m-%d"))
+    n = _msg_counts.get(key, 0) + 1
+    _msg_counts[key] = n
+    if n == _DAILY_MSG_LIMIT + 1:
+        log.warning("Daily message cap hit: owner=%s count=%d — blocking further messages", owner_id, n)
+    return n <= _DAILY_MSG_LIMIT
+
+
 import re as _re
 # Pre-compiled at import time — lazy-compile inside _finalize_save was a
 # race between the poll thread and any callback thread on first save.
@@ -336,6 +353,13 @@ def process_message(message: dict) -> None:
     log.info("Owner message: kind=%s len=%d", cmd_head, len(text))
     msg_id = message.get("message_id", 0)
 
+    if not _check_daily_msg_quota(owner_id):
+        # One warning at the cap, then silence — avoids feedback amplification
+        # if the abuse is a stuck client looping.
+        if _msg_counts[(owner_id, datetime.now(MSK_TZ).strftime("%Y-%m-%d"))] == _DAILY_MSG_LIMIT + 1:
+            send_message(chat_id, f"Превышен дневной лимит сообщений ({_DAILY_MSG_LIMIT}). Сброс — в полночь МСК.")
+        return
+
     # L0: save user message to chat log
     insert_chat_message("user", text, msg_id, owner_id)
 
@@ -392,10 +416,16 @@ def process_message(message: dict) -> None:
             send_message(chat_id, f"Пользователь {target_cid} уже есть или ошибка добавления.")
         return
 
-    # Feedback → GitHub Issue (dialog mode)
+    # Feedback → GitHub Issue (dialog mode). Warn before user types — the
+    # destination is a public repo (petrovich-opendev/petrovich-health), so
+    # pasting biomarker values / dose info / diagnosis here leaks PHI.
     if text.strip().lower().startswith("/feedback"):
         _pending[owner_id] = {"ts": time.time(), "action": "feedback"}
-        send_message(chat_id, "💬 Напиши что не так или что хочешь улучшить:")
+        send_message(chat_id,
+            "💬 Напиши что не так или что хочешь улучшить.\n\n"
+            "⚠️ <b>Отзыв попадёт в публичный репозиторий</b> на GitHub — "
+            "не вставляй сюда показатели, дозы, диагнозы или другую "
+            "медицинскую информацию.")
         return
 
     # Reminders — handled here because needs chat_id

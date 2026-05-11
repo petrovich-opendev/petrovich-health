@@ -373,7 +373,9 @@ def run_profile(log: logging.Logger, owner_id: str = "524605979") -> int:
     if lab.result_rows:
         last_lab = lab.result_rows[-1]
         data_blob += f":{last_lab[0]}:{last_lab[2]}:{last_lab[3]}"
-    data_hash = hashlib.md5(data_blob.encode()).hexdigest()[:16]
+    # usedforsecurity=False — this is a content fingerprint, not auth/crypto.
+    # MD5 is fine for "did the data change since the last digest" use.
+    data_hash = hashlib.md5(data_blob.encode(), usedforsecurity=False).hexdigest()[:16]
 
     # Always rebuild — clinical lessons and digests change daily
     # Hash used only for logging, not skipping

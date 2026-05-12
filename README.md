@@ -189,7 +189,7 @@ All features work from free chat text. Commands are optional shortcuts. The Tele
 | `/remind` | Manage reminders (or natural-language) |
 | `/eat <food>` | Log a meal |
 | `/weight` | Log body weight |
-| `/goal` | Set fitness goal + macros |
+| `/goal` | View current goal or run the 5-step setup (type → weight → height → age → activity). On re-entry shows the saved goal with ✏️ Change / ✅ Keep buttons; new setup uses inline keyboards for type and activity steps with ❌ Cancel on every step. |
 | `/week` | Weekly review |
 | `/train` | Recent workouts |
 | `/progress <exercise>` | Exercise progression |
@@ -209,6 +209,8 @@ See [CHANGELOG.md](CHANGELOG.md) for older entries.
 - Diagnostician rule 8 + rolling-window stack scan (90-day lookback)
 - Codebase split: `tg_listener.py` 2730 → 623 lines, 8 focused modules
 - AppSec sweep: SQL parameter binds end-to-end, per-owner LLM concurrency lock with daily cost log, argv `--` separator, filename sanitiser, YAML/HTML escaping, `data/`/`logs/` chmod 700, PHI redaction, daily message cap
+- `/goal` UX: re-entry surfaces the saved goal (no more silent restart), inline keyboards for type/activity steps, ❌ Cancel on every step, prior `active=true` rows deactivated on save
+- `/help` synced with `setMyCommands` — `/goal`, `/weight`, `/eat`, `/week`, `/feedback` are now grouped and visible in the help body
 
 ## License
 

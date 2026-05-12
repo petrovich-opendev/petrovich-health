@@ -122,31 +122,39 @@ def handle_command(text: str, owner_id: str = "524605979") -> str | None:
         return (
             "🏥 <b>Health Analytics Bot</b>\n\n"
             "Отправь PDF, фото или текст анализов — я извлеку показатели и сохраню.\n\n"
-            "<b>Команды:</b>\n"
+            "<b>Анализы и тренды:</b>\n"
             "/last — последние результаты\n"
             "/trend &lt;показатель&gt; — тренд (напр. /trend гемоглобин)\n"
-            "/search &lt;текст&gt; — полнотекстовый поиск по всем анализам\n"
+            "/search &lt;текст&gt; — полнотекстовый поиск\n"
             "/abnormal — показатели вне нормы\n"
             "/biomarkers — список всех показателей в базе\n"
-            "/spc — SPC-анализ (контрольные карты биомаркеров)\n"
-            "/alerts — проактивные алерты (давность анализов, тренды)\n"
-            "/protocol — текущий стек и сроки follow-up анализов\n"
-            "/adherence — приверженность приёму (PDC за 30д, целевой ≥80%)\n"
-            "/ddi &lt;препарат&gt; — взаимодействия лекарств (DDI)\n"
+            "/spc — SPC-анализ (контрольные карты)\n"
             "/correlations — корреляции по системам органов\n"
-            "/remind — напоминания о приёме препаратов\n"
-            "/report — PDF-отчёт для врача\n"
-            "/stats — статистика базы\n"
-            "/summary — общая оценка здоровья (LLM)\n"
+            "/stats — статистика базы\n\n"
+            "<b>Препараты и протокол:</b>\n"
+            "/protocol — текущий стек и сроки follow-up\n"
+            "/adherence — приверженность приёму (PDC ≥80%)\n"
+            "/ddi &lt;препарат&gt; — взаимодействия (DDI)\n"
+            "/remind — напоминания о приёме\n"
+            "/alerts — проактивные алерты\n\n"
+            "<b>Цель, питание, вес:</b>\n"
+            "/goal — установить или посмотреть цель (макросы, калории)\n"
+            "/weight [кг] — записать вес\n"
+            "/eat [описание] — записать приём пищи (фото или текст)\n"
+            "/week — еженедельный ревью\n\n"
+            "<b>Тренировки:</b>\n"
             "/train — последние тренировки\n"
-            "/progress &lt;упражнение&gt; — прогресс (напр. /progress подтягивания)\n\n"
+            "/progress &lt;упражнение&gt; — прогресс\n\n"
+            "<b>Прочее:</b>\n"
+            "/report — PDF-отчёт для врача\n"
+            "/summary — общая оценка здоровья (LLM)\n"
+            "/feedback — отзыв или сообщение об ошибке\n\n"
             "<b>Ввод данных:</b>\n"
             "📎 PDF файл — парсинг и сохранение\n"
             "📸 Фото анализов — OCR распознавание\n"
             "📝 Текст анализов — автораспознавание\n"
             "🏋️ Текст тренировки — автораспознавание\n\n"
-            "Любой другой текст — вопрос о здоровье.\n\n"
-            "💬 Нашёл баг или есть идея? /feedback твоё сообщение"
+            "Любой другой текст — вопрос о здоровье."
         )
 
     if cmd_name == "/last":
@@ -224,16 +232,7 @@ def handle_command(text: str, owner_id: str = "524605979") -> str | None:
         return "\n".join(lines)
 
     if cmd_name == "/goal":
-        _pending[owner_id] = {"ts": time.time(), "action": "goal_type"}
-        return (
-            "🎯 <b>Какая у тебя цель?</b>\n\n"
-            "1️⃣ Набор мышечной массы\n"
-            "2️⃣ Снижение жира\n"
-            "3️⃣ Рекомпозиция (и то и то)\n"
-            "4️⃣ Выносливость\n"
-            "5️⃣ Долголетие\n"
-            "6️⃣ Общее здоровье"
-        )
+        return ("__goal__", owner_id)
 
     if cmd_name == "/weight":
         if not arg:
@@ -563,6 +562,61 @@ def _handle_rich_command(cmd: tuple, chat_id: str, owner_id: str, user: dict) ->
     elif action == "__correlations__":
         send_typing(chat_id)
         _show_correlations(chat_id, owner_id)
+
+    elif action == "__goal__":
+        _show_goal_entry(chat_id, owner_id)
+
+
+# ── Goal entry ──
+def _show_goal_entry(chat_id: str, owner_id: str) -> None:
+    """Show existing active goal (if any) with «Изменить»/«Оставить», else start dialog.
+
+    Fixes the original UX bug: re-running /goal used to drop straight back to
+    step 1 and lose all visibility into what the user had previously saved.
+    """
+    from db import get_client
+    from tg_pending import (
+        _GOAL_TYPE_LABELS,
+        _ACTIVITY_LABELS,
+        _existing_goal_keyboard,
+        _goal_type_keyboard,
+        _pending,
+    )
+
+    try:
+        ch = get_client()
+        r = ch.query(
+            "SELECT goal_type, current_weight_kg, height_cm, age, activity_level, "
+            "bmr, tdee, target_calories, protein_g, fat_g, carbs_g, "
+            "leucine_target_g, created_at "
+            "FROM goals WHERE owner_id = {o:String} "
+            "ORDER BY created_at DESC LIMIT 1",
+            parameters={"o": owner_id},
+        )
+        rows = r.result_rows
+    except Exception as exc:
+        log.warning("/goal lookup failed (non-fatal): %s", exc)
+        rows = []
+
+    if rows:
+        g = rows[0]
+        created = g[12].strftime("%d.%m.%Y") if g[12] else "?"
+        msg = (
+            f"🎯 <b>Текущая цель:</b> {_GOAL_TYPE_LABELS.get(g[0], g[0])}\n"
+            f"⚖️ Вес: <b>{g[1]:g} кг</b>   📏 Рост: <b>{g[2]:g} см</b>   🎂 Возраст: <b>{g[3]}</b>\n"
+            f"🏃 Активность: <b>{_ACTIVITY_LABELS.get(g[4], g[4])}</b>\n\n"
+            f"<b>Калории:</b> {g[7]:.0f} ккал/день\n"
+            f"<b>Белок:</b> {g[8]:.0f}г  <b>Жиры:</b> {g[9]:.0f}г  <b>Углеводы:</b> {g[10]:.0f}г\n"
+            f"<b>Лейцин:</b> {g[11]:.1f}г/день\n\n"
+            f"<i>Установлено {created}</i>"
+        )
+        send_message(chat_id, msg, reply_markup=_existing_goal_keyboard())
+        return
+
+    _pending[owner_id] = {"ts": time.time(), "action": "goal_type"}
+    send_message(chat_id,
+        "🎯 <b>Какая у тебя цель?</b>\n\nЖми кнопку или напиши цифру 1-6.",
+        reply_markup=_goal_type_keyboard())
 
 
 # ── Eat processing ──

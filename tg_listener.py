@@ -724,6 +724,9 @@ def main() -> None:
                         cb_data = (callback.get("data") or "")
                         if cb_data.startswith("med_"):
                             _handle_medication_callback(callback)
+                        elif cb_data.startswith("goal_"):
+                            from tg_pending import handle_goal_callback
+                            handle_goal_callback(callback)
                         else:
                             _handle_extraction_callback(callback)
                     except Exception as exc:
